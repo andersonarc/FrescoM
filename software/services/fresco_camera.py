@@ -1,10 +1,39 @@
 from services.image_processor import ImageProcessor
-import PySpin
 
 
-class FrescoCamera:
+class BaseCamera:
+
+    def get_current_image(self):
+        pass
+
+    def set_exposure(self, millis: int):
+        pass
+
+    def set_auto_exposure(self, auto: bool):
+        pass
+
+    def set_autocorrect_contrast(self, auto: bool):
+        pass
+
+
+class DummyCamera(BaseCamera):
+
+    def get_current_image(self):
+        return np.zeros((800, 800), dtype=np.uint8)
+
+    def set_exposure(self, millis: int):
+        pass
+
+    def set_auto_exposure(self, auto: bool):
+        pass
+
+    def set_autocorrect_contrast(self, auto: bool):
+        pass
+
+class FrescoCamera(BaseCamera):
 
     def __init__(self, image_processor: ImageProcessor):
+        import PySpin
         self.camera_system = PySpin.System.GetInstance()
         self.camera_list = self.camera_system.GetCameras()
         self.camera = self.camera_list.GetByIndex(0)

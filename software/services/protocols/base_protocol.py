@@ -12,7 +12,7 @@ class BaseProtocol:
                  images_storage: ImagesStorage):
         self.fresco_xyz = fresco_xyz
         self.z_camera = z_camera
-        self.images_storage = ImagesStorage
+        self.images_storage = images_storage
         number_of_steps_in_2_pi = 200 * 8
         rod_length_for_one_rotation = 8.0  # in mm
         distance_between_well_centers = 9.0  # in mm
