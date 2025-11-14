@@ -1,24 +1,38 @@
+from plates import get_plate_config
 from services.services import global_services
 import logging
 
 
-class FrescoXYZ:
+class CollisionWarning(Warning):
+    """Warning raised for potential collision issues."""
+    pass
 
-    def __init__(self, virtual_only: bool):
+
+class FrescoXYZ:
+    STEPS_PER_MM = 200.0
+    SAFE_DEFAULT_Z = -4000  # -20mm above plate (negative is up)
+
+    def __init__(self, virtual_only: bool, plate_type):
         if not virtual_only:
             self.serial_service = global_services.serial_service
             print('Serial service initialized')
         else:
             print('Running in virtual-only mode')
 
+        self.plate = get_plate_config(plate_type)
         self.virtual_only = virtual_only
-        self.virtual_position = {'x': 0, 'y': 0, 'z': 0}
+        self.virtual_position = {'x': self.plate['bottom_left'][0], 'y': self.plate['bottom_left'][1], 'z': self.SAFE_DEFAULT_Z}
         self.virtual_pump_positions = {}
         self.virtual_manifold_position = 0
         self.white_led_on = False
         self.blue_led_on = False
+        self.is_capturing = False
         self.topLeftPosition = (-1, -1)
         self.bottomRightPosition = (-1, -1)
+        
+        self.renderer = None
+        self.stop_requested = False
+        self.collision_warnings_enabled = True
 
     def send(self, message: str):
         logging.debug(f"[FrescoXYZ] Sending: {message}")
@@ -34,7 +48,6 @@ class FrescoXYZ:
         return response
         
     def _emulate_command(self, message: str) -> str:
-        """Emulate hardware commands in virtual mode."""
         parts = message.strip().split()
 
         if not parts:
@@ -60,6 +73,11 @@ class FrescoXYZ:
                 if pump_idx not in self.virtual_pump_positions:
                     self.virtual_pump_positions[pump_idx] = 0
                 self.virtual_pump_positions[pump_idx] += delta
+                
+                # Record pump event in renderer
+                if self.renderer:
+                    self.renderer.record_pump_event(pump_idx, delta)
+                
                 logging.info(f"[Emulator] Pump {pump_idx} -> {self.virtual_pump_positions[pump_idx]}")
             except ValueError:
                 pass
@@ -81,16 +99,16 @@ class FrescoXYZ:
                 pass
 
         elif cmd == "Zero":
-            self.virtual_position = {'x': 0, 'y': 0, 'z': 0}
-            logging.info("[Emulator] Zero XYZ")
+            self.virtual_position = {'x': 0, 'y': 0, 'z': self.SAFE_DEFAULT_Z}
+            logging.info("[Emulator] Zero XYZ (raised to safe height)")
 
         elif cmd == "ManifoldZero":
             self.virtual_manifold_position = 0
             logging.info("[Emulator] Zero Manifold")
 
         elif cmd == "VerticalZero":
-            self.virtual_position['z'] = 0
-            logging.info("[Emulator] Zero Z")
+            self.virtual_position['z'] = self.SAFE_DEFAULT_Z
+            logging.info("[Emulator] Zero Z (raised to safe height)")
 
         elif cmd == "GetTopLeftBottomRightCoordinates":
             logging.info(f"[Emulator] TopLeft: {self.topLeftPosition}, BottomRight: {self.bottomRightPosition}")
@@ -113,9 +131,54 @@ class FrescoXYZ:
             logging.info(f"[Emulator] Blue LED: {'ON' if self.blue_led_on else 'OFF'}")
 
         return "OK"
-
-    # High-level command methods
     
+    def _check_collision(self, new_pos_steps):
+        """Advisory collision check - warns but doesn't block."""
+        if not self.renderer or not self.collision_warnings_enabled:
+            return None
+        
+        x_mm = new_pos_steps['x'] / self.STEPS_PER_MM
+        y_mm = new_pos_steps['y'] / self.STEPS_PER_MM
+        z_mm = -new_pos_steps['z'] / self.STEPS_PER_MM
+        
+        max_x = self.renderer.plate_width / 2 + 15
+        max_y = self.renderer.plate_height / 2 + 15
+        
+        warnings = []
+        
+        if abs(x_mm) > max_x:
+            warnings.append(f"X out of bounds: {x_mm:.1f}mm (max +/-{max_x:.1f}mm)")
+        if abs(y_mm) > max_y:
+            warnings.append(f"Y out of bounds: {y_mm:.1f}mm (max +/-{max_y:.1f}mm)")
+        
+        well = self.renderer.get_well_at_position(x_mm, y_mm)
+        manifold_z_mm = -self.virtual_manifold_position / self.STEPS_PER_MM
+        tip_z = manifold_z_mm + 20.0
+        
+        plate_top = self.renderer.plate_config['plate_thickness']
+        
+        if well is None and tip_z > -2.0 and tip_z < plate_top + 2.0:
+            warnings.append(f"Manifold tip near plate surface at Z={tip_z:.1f}mm")
+        elif well and tip_z > (plate_top - well.depth + 2.0):
+            warnings.append(f"Manifold tip near well {well.label} bottom")
+        
+        self.renderer.collision_state = bool(warnings)
+        
+        return warnings if warnings else None
+    
+    def request_stop(self):
+        """Request protocol stop - should be checked in protocol loops."""
+        self.stop_requested = True
+        logging.warning("Protocol stop requested")
+    
+    def should_stop(self) -> bool:
+        """Check if protocol should stop."""
+        return self.stop_requested
+    
+    def reset_stop_flag(self):
+        """Reset stop flag for new protocol."""
+        self.stop_requested = False
+
     def white_led_switch(self, state: bool):
         message = 'SwitchLedW 1' if state else 'SwitchLedW 0'
         self.send(message)
@@ -125,6 +188,19 @@ class FrescoXYZ:
         self.send(message)
 
     def delta(self, x: float, y: float, z: float):
+        new_pos = {
+            'x': self.virtual_position['x'] + x,
+            'y': self.virtual_position['y'] + y,
+            'z': self.virtual_position['z'] + z
+        }
+        
+        warnings = self._check_collision(new_pos)
+        if warnings:
+            for warning in warnings:
+                logging.warning(f"COLLISION WARNING: {warning}")
+                import warnings as warn_module
+                warn_module.warn(warning, CollisionWarning, stacklevel=2)
+        
         message = f'Delta {x} {y} {z}'
         self.execute_command(message)
 
@@ -137,6 +213,15 @@ class FrescoXYZ:
         self.execute_command(message)
 
     def set_position(self, x: float, y: float, z: float):
+        new_pos = {'x': x, 'y': y, 'z': z}
+        
+        warnings = self._check_collision(new_pos)
+        if warnings:
+            for warning in warnings:
+                logging.warning(f"COLLISION WARNING: {warning}")
+                import warnings as warn_module
+                warn_module.warn(warning, CollisionWarning, stacklevel=2)
+        
         message = f'SetPosition {x} {y} {z}'
         self.execute_command(message)
 
