@@ -513,10 +513,10 @@ class FrescoRenderer:
         self.zoom_level = max(self.zoom_level / 1.2, 0.1)
     
     def rotate_left(self):
-        self.camera_azimuth -= 15.0
+        self.camera_azimuth += 15.0
     
     def rotate_right(self):
-        self.camera_azimuth += 15.0
+        self.camera_azimuth -= 15.0
     
     def rotate_up(self):
         self.camera_elevation = min(self.camera_elevation + 10.0, 89.0)
