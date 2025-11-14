@@ -12,12 +12,12 @@ import logging
 
 
 class AIProtocolGeneratorUI(Frame):
-    """Separate AI interface for protocol generation."""
 
     def __init__(self, master, protocols_performer: ProtocolsPerformer):
         super().__init__(master=master)
         self.protocols_performer = protocols_performer
         self.generated_code = None
+        self.generated_protocol_name = None
         self.last_error = None
         self.conversation_history: List[Dict] = []
         self.init_ui()
@@ -26,7 +26,7 @@ class AIProtocolGeneratorUI(Frame):
         header = Frame(self)
         header.pack(fill=tk.X, pady=(5, 10))
         
-        tk.Label(header, text="AI Protocol Generator", font=("Arial", 12)).pack(side=tk.LEFT)
+        tk.Label(header, text="Protocol Generator", font=("Arial", 12)).pack(side=tk.LEFT)
         tk.Button(header, text="Load", command=self.load_conversation).pack(side=tk.RIGHT, padx=2)
         tk.Button(header, text="Save", command=self.save_conversation).pack(side=tk.RIGHT, padx=2)
         tk.Button(header, text="New", command=self.reset_conversation).pack(side=tk.RIGHT, padx=2)
@@ -109,7 +109,6 @@ class AIProtocolGeneratorUI(Frame):
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
     def add_to_conversation(self, role: str, content: str):
-        """Add message to conversation display."""
         self.conv_text.config(state=tk.NORMAL)
         
         if role == "user":
@@ -124,7 +123,6 @@ class AIProtocolGeneratorUI(Frame):
         self.conv_text.config(state=tk.DISABLED)
 
     def reset_conversation(self):
-        """Start a new conversation."""
         if self.conversation_history and not messagebox.askyesno("New Conversation", 
                                                                  "Start a new conversation? Current progress will be lost."):
             return
@@ -147,7 +145,6 @@ class AIProtocolGeneratorUI(Frame):
         self.add_to_conversation("system", "New conversation started. Describe the protocol you want to create.")
 
     def save_conversation(self):
-        """Save conversation to file."""
         if not self.conversation_history:
             messagebox.showwarning("No Conversation", "No conversation to save.")
             return
@@ -169,7 +166,6 @@ class AIProtocolGeneratorUI(Frame):
                 messagebox.showerror("Error", str(e))
 
     def load_conversation(self):
-        """Load conversation from file."""
         filename = simpledialog.askstring("Load Conversation", "Filename (without .json):", parent=self)
         if filename:
             if not filename.endswith('.json'):
@@ -203,7 +199,6 @@ class AIProtocolGeneratorUI(Frame):
                 messagebox.showerror("Error", str(e))
 
     def send_message(self):
-        """Send user message to Claude."""
         message = self.input_text.get("1.0", tk.END).strip()
         if not message:
             return
@@ -361,9 +356,11 @@ When you have all information and are ready to generate code:
         self.status.config(text="Ready for your response...", )
 
     def _on_code_generated(self, response: dict):
-        """Handle code generation response."""
         self.add_to_conversation("assistant", f"Generated: {response.get('name', 'Protocol')}")
-        
+
+        # Store protocol name for default filename
+        self.generated_protocol_name = response.get('name', 'Protocol')
+
         # Validate syntax
         try:
             compile(self.generated_code, '<string>', 'exec')
@@ -372,27 +369,25 @@ When you have all information and are ready to generate code:
             self.send_btn.config(state=tk.NORMAL)
             self.status.config(text="Syntax error - please ask Claude to fix it", )
             return
-        
+
         # Show code
         self.code_text.delete("1.0", tk.END)
         self.code_text.insert("1.0", self.generated_code)
-        
+
         # Enable buttons
         self.save_btn.config(state=tk.NORMAL)
         self.exec_btn.config(state=tk.NORMAL)
         self.send_btn.config(state=tk.NORMAL)
-        
+
         self.status.config(text=f"[SUCCESS] {response.get('name', 'Protocol')} generated", )
         self.add_to_conversation("system", "[SUCCESS] Code generated! You can now execute it or ask for changes.")
 
     def _on_error(self, error: str):
-        """Handle errors."""
         self.add_to_conversation("system", f"[ERROR] {error}")
         self.send_btn.config(state=tk.NORMAL)
         self.status.config(text="Error occurred", )
 
     def log(self, message: str, level: str = "info"):
-        """Add message to execution log."""
         color = {"error": "red", "success": "green", "info": "black"}.get(level, "black")
         self.log_text.insert(tk.END, f"{message}\n", (color,))
         self.log_text.tag_config("red", foreground="red")
@@ -484,16 +479,18 @@ When you have all information and are ready to generate code:
             _thread.start_new_thread(self._process_message, ())
 
     def save(self):
-        """Save protocol to file."""
         if not self.generated_code:
             return
-        
-        name = simpledialog.askstring("Save", "Filename (without .py):", parent=self)
+
+        # Convert PascalCase protocol name to snake_case for filename
+        default_name = self._to_snake_case(self.generated_protocol_name) if self.generated_protocol_name else "my_protocol"
+
+        name = simpledialog.askstring("Save", "Filename (without .py):", parent=self, initialvalue=default_name)
         if name:
             if not name.endswith('.py'):
                 name += '.py'
             path = f"{self.protocols_performer.protocols_folder_path}/{name}"
-            
+
             try:
                 with open(path, 'w') as f:
                     f.write(self.generated_code)
@@ -502,6 +499,13 @@ When you have all information and are ready to generate code:
             except Exception as e:
                 self.log(f"Save error: {e}", "error")
                 messagebox.showerror("Error", str(e))
+
+    def _to_snake_case(self, name: str) -> str:
+        import re
+        # Insert underscore before uppercase letters (except at start)
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        # Insert underscore before uppercase letters followed by lowercase
+        return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
     def _get_plate_info(self) -> str:
         xyz = self.protocols_performer.fresco_xyz
@@ -523,9 +527,10 @@ When you have all information and are ready to generate code:
 
 ## Coordinate System
 - 200 steps = 1mm
-- Origin (0,0,0) at BOTTOM-LEFT corner of plate
+- Plate-relative coordinates: (0,0) is ALWAYS the bottom-left well (A1)
 - Z-axis: negative=up, positive=down
-- Robot starts at (0,0) which is the bottom-left well position
+- Plate calibration is handled automatically - all movement methods account for it
+- Use any movement method freely - set_position(), delta(), or helper methods all work
 
 ## Current Plate Configuration
 {plate_info}
@@ -543,26 +548,34 @@ class MyProtocol(BaseProtocol):
         self.fresco_xyz.white_led_switch(True)
         folder = self.images_storage.create_new_session_folder()
 
-        # Use plate info from base class:
-        # self.plate_rows, self.plate_cols
-        # self.well_spacing_mm, self.well_spacing_steps
+        # Example 1: Using helper method to visit all wells
+        for row in range(self.plate_rows):
+            for col in range(self.plate_cols):
+                self.move_to_well(row, col)  # row 0 = A, col 0 = 1
+                # Do something...
+                self.check_pause_stop()
 
-        # Example: move to next well
-        # self.fresco_xyz.delta(self.well_spacing_steps, 0, 0)
+        # Example 2: Using absolute positioning
+        self.fresco_xyz.set_position(0, 0, -2000)  # Go to A1 at z=-2000
 
-        # Check for pause/stop in loops:
-        self.check_pause_stop()
+        # Example 3: Using relative movement
+        self.fresco_xyz.delta(self.well_spacing_steps, 0, 0)  # Move one well right
 
         if self.fresco_xyz.should_stop():
             return
 ```
 
 ## Available Methods
-**Movement (self.fresco_xyz):**
-- `self.fresco_xyz.delta(x_steps, y_steps, z_steps)` - relative movement
-- `self.fresco_xyz.set_position(x_steps, y_steps, z_steps)` - absolute movement
-- `self.fresco_xyz.go_to_zero()` - return to (0,0,safe_z)
-- `self.fresco_xyz.go_to_zero_z()` - raise Z to safe height
+
+**Movement (self.fresco_xyz) - All methods handle calibration automatically:**
+- `self.fresco_xyz.set_position(x_steps, y_steps, z_steps)` - Move to plate-relative position
+- `self.fresco_xyz.delta(x_steps, y_steps, z_steps)` - Move relative to current position
+- `self.fresco_xyz.go_to_zero()` - Return to (0,0) bottom-left well at safe height
+- `self.fresco_xyz.go_to_zero_z()` - Raise Z to safe height
+
+**Well Navigation Helpers (from BaseProtocol) - Convenient for well-based protocols:**
+- `self.move_to_well(row, col, z=None)` - Move to specific well by row/col indices
+- `self.get_well_position(row, col, z=None)` - Get (x, y, z) position for a well
 
 **Pumps (self.fresco_xyz):**
 - `self.fresco_xyz.delta_pump(pump_index, delta_steps)` - pump_index 0-7, positive=dispense, negative=aspirate
@@ -602,9 +615,10 @@ Users can pause or stop protocols during execution:
 ## Key Rules
 1. All coordinates must be integers - use `int()` when calculating
 2. Negative Z = up, positive Z = down
-3. Origin is bottom-left, not centered
-4. Check `should_stop()` and call `check_pause_stop()` regularly
-5. Use `self.plate_rows`, `self.plate_cols`, `self.well_spacing_steps` from BaseProtocol"""
+3. Plate-relative coordinates: (0,0) = bottom-left well (A1)
+4. Well indices are 0-based: row 0 = A, row 1 = B, etc.; col 0 = 1, col 1 = 2, etc.
+5. Check `should_stop()` and call `check_pause_stop()` regularly in loops
+6. Use any movement method freely - all handle calibration automatically"""
 
     def _get_example_protocols(self) -> List[tuple]:
         examples = []

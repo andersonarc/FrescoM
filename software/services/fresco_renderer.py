@@ -32,7 +32,7 @@ class Well:
 class FrescoRenderer:
     MANIFOLD_TIP_LENGTH = 20.0
     WELL_SEGMENTS = 12
-    TRAJECTORY_MAX_POINTS = 100
+    TRAJECTORY_MAX_POINTS = 500
     
     def __init__(self, image_processor, fresco_xyz, plate_type='96-well'):
         self.image_processor = image_processor
@@ -52,8 +52,17 @@ class FrescoRenderer:
         pygame.display.set_caption("Fresco 3D View")
         
         pygame.font.init()
-        self.label_font = pygame.font.SysFont('Arial', 24, bold=True)
-        
+
+        # Scale robot and labels based on plate type
+        base_well_spacing = 9.0  # 96-well plate
+        scale_factor = cfg['well_spacing'] / base_well_spacing
+        # More aggressive scaling for labels to prevent overlap on dense plates
+        font_size = max(6, int(24 * (scale_factor ** 1.5)))
+        self.label_font = pygame.font.SysFont('Arial', font_size, bold=True)
+        self.robot_scale = scale_factor
+        self.label_scale = 10.0 * scale_factor  # Scale OpenGL text labels
+        self.label_offset = 8.0 * scale_factor  # Distance from plate edge to labels
+
         self._init_opengl()
 
         self.camera_distance = 250.0
@@ -71,11 +80,15 @@ class FrescoRenderer:
         self.last_render_pos = None
         self.is_moving = False
         self.collision_state = False
+        self.cached_image = None
+        self.main_thread_id = threading.get_ident()
 
         self.pump_colors = [
             (1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0), (1.0, 1.0, 0.3),
             (1.0, 0.3, 1.0), (0.3, 1.0, 1.0), (1.0, 0.6, 0.3), (0.6, 0.3, 1.0),
         ]
+
+        self.camera_flash = False  # Camera flash effect (yellow for 1 frame)
 
         logging.info(f"Renderer initialized with {plate_type} plate")
     
@@ -110,8 +123,14 @@ class FrescoRenderer:
 
         return wells
 
+    def clear_position_history(self):
+        with self.position_lock:
+            self.position_history = []
+            logging.info("Position history cleared due to plate calibration change")
+
     def record_position(self, x_mm, y_mm, z_mm):
-        """Record position in trajectory (called by fresco_xyz on movement)."""
+        # Robot position is recorded in absolute coordinates (not transformed by plate offset)
+        # The plate wells will be drawn at positions adjusted by the offset
         pos = {'x': self.plate_width - x_mm, 'y': self.plate_height - y_mm, 'z': z_mm}
         with self.position_lock:
             if (not self.position_history or
@@ -123,8 +142,19 @@ class FrescoRenderer:
                     self.position_history.pop(0)
 
     def get_well_at_position(self, x_mm, y_mm):
+        # Convert robot absolute position to plate-relative position
+        # Wells are in plate-relative coordinates (0 to plate_width)
+        if self.fresco_xyz and hasattr(self.fresco_xyz, 'plate'):
+            plate_offset_x = self.fresco_xyz.plate['bottom_left'][0] / STEPS_PER_MM
+            plate_offset_y = self.fresco_xyz.plate['bottom_left'][1] / STEPS_PER_MM
+            plate_relative_x = x_mm - plate_offset_x
+            plate_relative_y = y_mm - plate_offset_y
+        else:
+            plate_relative_x = x_mm
+            plate_relative_y = y_mm
+
         for well in self.wells:
-            if well.contains_point(x_mm, y_mm):
+            if well.contains_point(plate_relative_x, plate_relative_y):
                 return well
         return None
     
@@ -134,6 +164,18 @@ class FrescoRenderer:
             logging.info(f"Pump event recorded: Well {self.current_well.label}, Pump {pump_index}, Volume {volume}")
     
     def get_current_image(self):
+        # OpenGL can ONLY be called from the main thread
+        # If called from another thread (e.g. focus), return cached image
+        if threading.get_ident() != self.main_thread_id:
+            if self.cached_image is not None:
+                return self.cached_image
+            # No cached image yet, return black
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+        # Clear any previous OpenGL errors
+        while glGetError() != GL_NO_ERROR:
+            pass
+
         robot_pos_physical = self._get_robot_position_physical()
         robot_pos = self._get_robot_position()
         self.current_well = self.get_well_at_position(robot_pos_physical['x'], robot_pos_physical['y'])
@@ -141,31 +183,42 @@ class FrescoRenderer:
         led_color = self._get_led_color()
         self._update_position_history(robot_pos)
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        try:
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
+            glMatrixMode(GL_MODELVIEW)
+            glLoadIdentity()
 
-        camera_x = self.target_position['x'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.sin(np.radians(self.camera_azimuth))
-        camera_y = self.target_position['y'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.cos(np.radians(self.camera_azimuth))
-        camera_z = self.target_position['z'] + self.camera_distance * np.sin(np.radians(self.camera_elevation))
+            camera_x = self.target_position['x'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.sin(np.radians(self.camera_azimuth))
+            camera_y = self.target_position['y'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.cos(np.radians(self.camera_azimuth))
+            camera_z = self.target_position['z'] + self.camera_distance * np.sin(np.radians(self.camera_elevation))
 
-        gluLookAt(
-            camera_x / self.zoom_level, camera_y / self.zoom_level, camera_z / self.zoom_level,
-            self.target_position['x'], self.target_position['y'], self.target_position['z'],
-            0, 0, 1
-        )
+            gluLookAt(
+                camera_x / self.zoom_level, camera_y / self.zoom_level, camera_z / self.zoom_level,
+                self.target_position['x'], self.target_position['y'], self.target_position['z'],
+                0, 0, 1
+            )
 
-        self._draw_scene(robot_pos, led_color)
+            self._draw_scene(robot_pos, led_color)
 
-        # Read from front buffer (working in original commit)
-        glReadBuffer(GL_FRONT)
-        pixels = glReadPixels(0, 0, self.width, self.height, GL_RGB, GL_UNSIGNED_BYTE)
-        image = np.frombuffer(pixels, dtype=np.uint8).reshape(self.height, self.width, 3)
-        image = np.flipud(image)
+            # Read from front buffer (working in original commit)
+            glReadBuffer(GL_FRONT)
+            pixels = glReadPixels(0, 0, self.width, self.height, GL_RGB, GL_UNSIGNED_BYTE)
+            image = np.frombuffer(pixels, dtype=np.uint8).reshape(self.height, self.width, 3)
+            image = np.flipud(image)
 
-        self.frame_count += 1
-        return image
+            # Clear camera flash after rendering 1 frame
+            if self.camera_flash:
+                self.camera_flash = False
+
+            # Cache the image for non-main thread requests
+            self.cached_image = image
+            self.frame_count += 1
+            return image
+        except Exception as e:
+            logging.error(f"OpenGL rendering error: {e}")
+            # Return black image on error to prevent crashes
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
     
     def _draw_scene(self, robot_pos, led_color):
         self._draw_plate_with_cells()
@@ -195,8 +248,20 @@ class FrescoRenderer:
 
         plate_thickness = plate_thickness * 0.5
 
-        cx = self.plate_width - well.center_x
-        cy = self.plate_height - well.center_y
+        # Transform well position by plate offset
+        # Well positions are plate-relative, add offset to get absolute position
+        if self.fresco_xyz and hasattr(self.fresco_xyz, 'plate'):
+            plate_offset_x = self.fresco_xyz.plate['bottom_left'][0] / STEPS_PER_MM
+            plate_offset_y = self.fresco_xyz.plate['bottom_left'][1] / STEPS_PER_MM
+        else:
+            plate_offset_x = 0
+            plate_offset_y = 0
+
+        well_abs_x = well.center_x + plate_offset_x
+        well_abs_y = well.center_y + plate_offset_y
+
+        cx = self.plate_width - well_abs_x
+        cy = self.plate_height - well_abs_y
         z_plate_bottom = 0.0
         z_plate_top = plate_thickness
         z_well_rim = plate_thickness
@@ -319,22 +384,35 @@ class FrescoRenderer:
         plate_thickness = cfg['plate_thickness']
         label_z = plate_thickness + 0.1
 
+        # Get plate offset for transforming well positions
+        if self.fresco_xyz and hasattr(self.fresco_xyz, 'plate'):
+            plate_offset_x = self.fresco_xyz.plate['bottom_left'][0] / STEPS_PER_MM
+            plate_offset_y = self.fresco_xyz.plate['bottom_left'][1] / STEPS_PER_MM
+        else:
+            plate_offset_x = 0
+            plate_offset_y = 0
+
         drawn_rows = set()
         drawn_cols = set()
 
         for well in self.wells:
+            well_abs_x = well.center_x + plate_offset_x
+            well_abs_y = well.center_y + plate_offset_y
+
             if well.row not in drawn_rows:
                 row_label = cfg['row_labels'][well.row]
-                label_x = self.plate_width + 8.0
-                label_y = self.plate_height - well.center_y
-                self._draw_text_3d(row_label, label_x, label_y, label_z, scale=10.0)
+                # Row labels shift horizontally with plate, vertically with row position
+                label_x = self.plate_width - plate_offset_x + self.label_offset
+                label_y = self.plate_height - well_abs_y
+                self._draw_text_3d(row_label, label_x, label_y, label_z, scale=self.label_scale)
                 drawn_rows.add(well.row)
 
             if well.col not in drawn_cols:
                 col_label = str(well.col + 1)
-                label_x = self.plate_width - well.center_x
-                label_y = self.plate_height + 8.0
-                self._draw_text_3d(col_label, label_x, label_y, label_z, scale=10.0)
+                # Column labels shift horizontally with column position, vertically with plate
+                label_x = self.plate_width - well_abs_x
+                label_y = self.plate_height - plate_offset_y + self.label_offset
+                self._draw_text_3d(col_label, label_x, label_y, label_z, scale=self.label_scale)
                 drawn_cols.add(well.col)
     
     def _draw_text_3d(self, text, x, y, z, scale=1.0):
@@ -392,7 +470,6 @@ class FrescoRenderer:
             glEnd()
     
     def _get_robot_position_physical(self):
-        """Get robot position in physical coordinates (not flipped)."""
         if self.fresco_xyz and hasattr(self.fresco_xyz, 'virtual_position'):
             pos = self.fresco_xyz.virtual_position.copy()
             return {
@@ -403,7 +480,6 @@ class FrescoRenderer:
         return {'x': 0.0, 'y': 0.0, 'z': 0.0}
 
     def _get_robot_position(self):
-        """Get robot position in display coordinates (flipped for rendering)."""
         if self.fresco_xyz and hasattr(self.fresco_xyz, 'virtual_position'):
             pos = self.fresco_xyz.virtual_position.copy()
             return {
@@ -416,16 +492,27 @@ class FrescoRenderer:
     def _get_led_color(self):
         if not self.fresco_xyz:
             return (0.5, 0.5, 0.5)
-        
+
+        # Camera flash (yellow) - overrides everything
+        if self.camera_flash:
+            return (1.0, 1.0, 0.0)
+
         if self.collision_state:
             return (1.0, 0.0, 0.0)
-        
+
         if hasattr(self.fresco_xyz, 'is_capturing') and self.fresco_xyz.is_capturing:
             return (1.0, 1.0, 0.0)
-        
-        if hasattr(self.fresco_xyz, 'blue_led_on') and self.fresco_xyz.blue_led_on:
+
+        # LED logic: white, blue, or both (blueish-white)
+        white_on = hasattr(self.fresco_xyz, 'white_led_on') and self.fresco_xyz.white_led_on
+        blue_on = hasattr(self.fresco_xyz, 'blue_led_on') and self.fresco_xyz.blue_led_on
+
+        if white_on and blue_on:
+            # Both white and blue: blueish-white
+            return (0.7, 0.8, 1.0)
+        elif blue_on:
             return (0.2, 0.4, 1.0)
-        elif hasattr(self.fresco_xyz, 'white_led_on') and self.fresco_xyz.white_led_on:
+        elif white_on:
             return (1.0, 1.0, 0.8)
         else:
             return (0.3, 0.3, 0.3)
@@ -455,9 +542,9 @@ class FrescoRenderer:
     def _draw_robot(self, pos, color):
         glPushMatrix()
         glTranslatef(pos['x'], pos['y'], pos['z'])
-        
-        radius = 2.0
-        height = 4.0
+
+        radius = 2.0 * self.robot_scale
+        height = 4.0 * self.robot_scale
         segments = 12
         
         glColor3f(*color)
@@ -513,10 +600,10 @@ class FrescoRenderer:
         self.zoom_level = max(self.zoom_level / 1.2, 0.1)
     
     def rotate_left(self):
-        self.camera_azimuth += 15.0
+        self.camera_azimuth -= 15.0
     
     def rotate_right(self):
-        self.camera_azimuth -= 15.0
+        self.camera_azimuth += 15.0
     
     def rotate_up(self):
         self.camera_elevation = min(self.camera_elevation + 10.0, 89.0)
@@ -533,10 +620,22 @@ class FrescoRenderer:
         self.camera_azimuth = 45.0
         self.zoom_level = 1.0
         self.target_position = {'x': self.plate_width / 2, 'y': self.plate_height / 2, 'z': 0.0}
-    
+
+    def pan_left(self):
+        self.target_position['y'] -= 5.0
+
+    def pan_right(self):
+        self.target_position['y'] += 5.0
+
+    def pan_up(self):
+        self.target_position['x'] -= 5.0
+
+    def pan_down(self):
+        self.target_position['x'] += 5.0
+
     def should_update_frequently(self):
-        return self.is_moving
-    
+        return self.is_moving or self.camera_flash
+
     def set_exposure(self, millis: int):
         pass
     

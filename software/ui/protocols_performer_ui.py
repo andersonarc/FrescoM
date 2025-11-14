@@ -19,7 +19,7 @@ class ProtocolsPerformerUI(Frame):
         header = Frame(self)
         header.pack(fill=tk.X, pady=(5, 10))
         
-        tk.Label(header, text="Protocol Executor", font=("Arial", 12)).pack(side=tk.LEFT)
+        tk.Label(header, text="Protocol Performer", font=("Arial", 12)).pack(side=tk.LEFT)
         tk.Button(header, text="Stop Protocol", command=self.stop_protocol).pack(side=tk.RIGHT, padx=5)
         tk.Button(header, text="Refresh List", command=self.refresh).pack(side=tk.RIGHT)
         
@@ -27,7 +27,7 @@ class ProtocolsPerformerUI(Frame):
         select_frame = Frame(self)
         select_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        tk.Label(select_frame, text="Select Protocol:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        tk.Label(select_frame, text="Select Protocol:", font=("Arial", 10)).pack(anchor=tk.W, pady=(0, 5))
         
         list_of_protocols = self.protocols_performer.available_protocols()
         self.protocols_combobox = Combobox(select_frame, width=70, state="readonly", font=("Arial", 9))
@@ -52,7 +52,7 @@ class ProtocolsPerformerUI(Frame):
         log_frame = Frame(self)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 10))
         
-        tk.Label(log_frame, text="Execution Log:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        tk.Label(log_frame, text="Execution Log:", font=("Arial", 10)).pack(anchor=tk.W, pady=(0, 5))
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=12, wrap=tk.WORD,
                                                   font=("Consolas", 9), bg="#f0f0f0")

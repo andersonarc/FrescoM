@@ -19,6 +19,7 @@ class ZCamera:
 
     @property
     def fresco_camera(self):
+        """Return camera or renderer fallback in virtual mode."""
         return self._camera if self._camera is not None else self._renderer
 
     def z_step_up(self):
@@ -67,9 +68,12 @@ class ZCamera:
     def find_offset_for_best_measure(self, one_jump_size: int, delta_jumps: int) -> (int, int):
         focus_measure_data_points = []
         for jump_index in range(0, delta_jumps):
-            self.frescoXYZ.is_capturing = True
+            # Only flash LED when using physical camera, not virtual renderer
+            if self._camera is not None:
+                self.frescoXYZ.is_capturing = True
             pixels_array = self.fresco_camera.get_current_image()
-            self.frescoXYZ.is_capturing = False
+            if self._camera is not None:
+                self.frescoXYZ.is_capturing = False
             measure = self.get_focus_measure(pixels_array)
             focus_measure_data_points.append(measure)
             self.frescoXYZ.delta(0, 0, -1 * one_jump_size)

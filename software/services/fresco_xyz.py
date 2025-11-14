@@ -147,11 +147,23 @@ class FrescoXYZ:
             curr_y = int(self.virtual_position['y'])
             self.topLeftPosition = (curr_x, curr_y)
 
-            # Top-left well should be at bottom_left.x, top_right.y
-            old_bottom_left = self.plate['bottom_left']
-            old_top_right = self.plate['top_right']
-            self.plate['bottom_left'] = (curr_x, old_bottom_left[1])
-            self.plate['top_right'] = (old_top_right[0], curr_y)
+            # Current position becomes top-left well (e.g. H1 for 96-well)
+            # Calculate plate dimensions from config
+            plate_width = (self.plate['cols'] - 1) * self.plate['steps_per_well']
+            plate_height = (self.plate['rows'] - 1) * self.plate['steps_per_well']
+
+            # Top-left well is at (bottom_left.x, bottom_left.y + plate_height)
+            # So: bottom_left = (curr_x, curr_y - plate_height)
+            self.plate['bottom_left'] = (curr_x, curr_y - plate_height)
+            self.plate['top_right'] = (curr_x + plate_width, curr_y)
+
+            # Clear position history and re-record current position with new offset
+            if self.renderer:
+                self.renderer.clear_position_history()
+                x_mm = curr_x / self.STEPS_PER_MM
+                y_mm = curr_y / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
 
             logging.info(f"[Emulator] Remembered top-left position: ({curr_x}, {curr_y})")
             logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
@@ -161,13 +173,77 @@ class FrescoXYZ:
             curr_y = int(self.virtual_position['y'])
             self.bottomRightPosition = (curr_x, curr_y)
 
-            # Bottom-right well should be at top_right.x, bottom_left.y
-            old_bottom_left = self.plate['bottom_left']
-            old_top_right = self.plate['top_right']
-            self.plate['bottom_left'] = (old_bottom_left[0], curr_y)
-            self.plate['top_right'] = (curr_x, old_top_right[1])
+            # Current position becomes bottom-right well (e.g. A12 for 96-well)
+            # Calculate plate dimensions from config
+            plate_width = (self.plate['cols'] - 1) * self.plate['steps_per_well']
+            plate_height = (self.plate['rows'] - 1) * self.plate['steps_per_well']
+
+            # Bottom-right well is at (bottom_left.x + plate_width, bottom_left.y)
+            # So: bottom_left = (curr_x - plate_width, curr_y)
+            self.plate['bottom_left'] = (curr_x - plate_width, curr_y)
+            self.plate['top_right'] = (curr_x, curr_y + plate_height)
+
+            # Clear position history and re-record current position with new offset
+            if self.renderer:
+                self.renderer.clear_position_history()
+                x_mm = curr_x / self.STEPS_PER_MM
+                y_mm = curr_y / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
 
             logging.info(f"[Emulator] Remembered bottom-right position: ({curr_x}, {curr_y})")
+            logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
+
+        elif cmd == "RememberBottomLeft":
+            curr_x = int(self.virtual_position['x'])
+            curr_y = int(self.virtual_position['y'])
+            self.topLeftPosition = (curr_x, curr_y)  # Reuse for consistency
+
+            # Current position becomes bottom-left well (e.g. A1 for 96-well)
+            # Calculate plate dimensions from config
+            plate_width = (self.plate['cols'] - 1) * self.plate['steps_per_well']
+            plate_height = (self.plate['rows'] - 1) * self.plate['steps_per_well']
+
+            # Bottom-left well is at (bottom_left.x, bottom_left.y)
+            # So: bottom_left = (curr_x, curr_y)
+            self.plate['bottom_left'] = (curr_x, curr_y)
+            self.plate['top_right'] = (curr_x + plate_width, curr_y + plate_height)
+
+            # Clear position history and re-record current position with new offset
+            if self.renderer:
+                self.renderer.clear_position_history()
+                x_mm = curr_x / self.STEPS_PER_MM
+                y_mm = curr_y / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
+
+            logging.info(f"[Emulator] Remembered bottom-left position: ({curr_x}, {curr_y})")
+            logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
+
+        elif cmd == "RememberTopRight":
+            curr_x = int(self.virtual_position['x'])
+            curr_y = int(self.virtual_position['y'])
+            self.bottomRightPosition = (curr_x, curr_y)  # Reuse for consistency
+
+            # Current position becomes top-right well (e.g. H12 for 96-well)
+            # Calculate plate dimensions from config
+            plate_width = (self.plate['cols'] - 1) * self.plate['steps_per_well']
+            plate_height = (self.plate['rows'] - 1) * self.plate['steps_per_well']
+
+            # Top-right well is at (bottom_left.x + plate_width, bottom_left.y + plate_height)
+            # So: bottom_left = (curr_x - plate_width, curr_y - plate_height)
+            self.plate['bottom_left'] = (curr_x - plate_width, curr_y - plate_height)
+            self.plate['top_right'] = (curr_x, curr_y)
+
+            # Clear position history and re-record current position with new offset
+            if self.renderer:
+                self.renderer.clear_position_history()
+                x_mm = curr_x / self.STEPS_PER_MM
+                y_mm = curr_y / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
+
+            logging.info(f"[Emulator] Remembered top-right position: ({curr_x}, {curr_y})")
             logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
 
         elif cmd == "SwitchLedW" and len(parts) >= 2:
@@ -184,16 +260,20 @@ class FrescoXYZ:
         """Advisory collision check - warns but doesn't block."""
         if not self.renderer or not self.collision_warnings_enabled:
             return None
-        
+
         x_mm = new_pos_steps['x'] / self.STEPS_PER_MM
         y_mm = new_pos_steps['y'] / self.STEPS_PER_MM
         z_mm = -new_pos_steps['z'] / self.STEPS_PER_MM
 
+        # Calculate plate bounds in absolute coordinates (accounting for offset)
+        plate_offset_x = self.plate['bottom_left'][0] / self.STEPS_PER_MM
+        plate_offset_y = self.plate['bottom_left'][1] / self.STEPS_PER_MM
+
         margin = 15
-        min_x = -margin
-        min_y = -margin
-        max_x = self.renderer.plate_width + margin
-        max_y = self.renderer.plate_height + margin
+        min_x = plate_offset_x - margin
+        min_y = plate_offset_y - margin
+        max_x = plate_offset_x + self.renderer.plate_width + margin
+        max_y = plate_offset_y + self.renderer.plate_height + margin
 
         warnings = []
 
@@ -239,19 +319,28 @@ class FrescoXYZ:
         self.send(message)
 
     def delta(self, x: float, y: float, z: float):
+        """
+        Move relative to current position.
+        Plate calibration is handled automatically.
+
+        Args:
+            x: X displacement in steps
+            y: Y displacement in steps
+            z: Z displacement in steps
+        """
         new_pos = {
             'x': self.virtual_position['x'] + x,
             'y': self.virtual_position['y'] + y,
             'z': self.virtual_position['z'] + z
         }
-        
+
         warnings = self._check_collision(new_pos)
         if warnings:
             for warning in warnings:
                 logging.warning(f"COLLISION WARNING: {warning}")
                 import warnings as warn_module
                 warn_module.warn(warning, CollisionWarning, stacklevel=2)
-        
+
         message = f'Delta {x} {y} {z}'
         self.execute_command(message)
 
@@ -264,20 +353,42 @@ class FrescoXYZ:
         self.execute_command(message)
 
     def set_position(self, x: float, y: float, z: float):
-        new_pos = {'x': x, 'y': y, 'z': z}
-        
+        """
+        Move to absolute plate-relative position.
+        Plate calibration is handled automatically - (0,0) is bottom-left well (A1).
+
+        Args:
+            x: X position in steps (plate-relative)
+            y: Y position in steps (plate-relative)
+            z: Z position in steps
+        """
+        # Convert plate-relative coordinates to absolute robot coordinates
+        # by adding the plate offset
+        if self.plate:
+            absolute_x = x + self.plate['bottom_left'][0]
+            absolute_y = y + self.plate['bottom_left'][1]
+        else:
+            absolute_x = x
+            absolute_y = y
+
+        new_pos = {'x': absolute_x, 'y': absolute_y, 'z': z}
+
         warnings = self._check_collision(new_pos)
         if warnings:
             for warning in warnings:
                 logging.warning(f"COLLISION WARNING: {warning}")
                 import warnings as warn_module
                 warn_module.warn(warning, CollisionWarning, stacklevel=2)
-        
-        message = f'SetPosition {x} {y} {z}'
+
+        message = f'SetPosition {int(absolute_x)} {int(absolute_y)} {int(z)}'
         self.execute_command(message)
 
     def go_to_zero(self):
-        self.execute_command('Zero')
+        """
+        Return to bottom-left well (A1) at safe Z height.
+        Plate calibration is handled automatically.
+        """
+        self.set_position(0, 0, self.SAFE_DEFAULT_Z)
 
     def go_to_zero_manifold(self):
         self.execute_command('ManifoldZero')
@@ -292,6 +403,14 @@ class FrescoXYZ:
     def remember_bottom_right_position(self):
         self.go_to_zero_z()
         self.execute_command('RememberBottomRight')
+
+    def remember_bottom_left_position(self):
+        self.go_to_zero_z()
+        self.execute_command('RememberBottomLeft')
+
+    def remember_top_right_position(self):
+        self.go_to_zero_z()
+        self.execute_command('RememberTopRight')
 
     def update_top_left_bottom_right(self):
         coordinates_response = self.execute_command('GetTopLeftBottomRightCoordinates')

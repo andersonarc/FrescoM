@@ -37,8 +37,45 @@ class BaseProtocol:
         self.check_pause_stop()
 
     def check_pause_stop(self):
+        """Check if protocol should pause or stop."""
         if self.protocol_controller:
             while self.protocol_controller.protocol_paused:
                 time.sleep(0.1)
             if self.protocol_controller.protocol_stop_requested:
                 raise InterruptedError("Protocol stopped by user")
+
+    def get_well_position(self, row: int, col: int, z: int = None):
+        """
+        Helper: Get plate-relative position (in steps) for a specific well.
+        Convenient for well-based protocols.
+
+        Args:
+            row: Row index (0-based, 0 = A, 1 = B, etc.)
+            col: Column index (0-based, 0 = first column)
+            z: Optional z position in steps (if None, keeps current z)
+
+        Returns:
+            tuple: (x_steps, y_steps, z_steps) for use with set_position()
+        """
+        x_steps = col * self.well_spacing_steps
+        y_steps = row * self.well_spacing_steps
+
+        if z is None:
+            z_steps = self.fresco_xyz.virtual_position['z']
+        else:
+            z_steps = z
+
+        return (int(x_steps), int(y_steps), int(z_steps))
+
+    def move_to_well(self, row: int, col: int, z: int = None):
+        """
+        Helper: Move to a specific well.
+        Convenient for well-based protocols.
+
+        Args:
+            row: Row index (0-based, 0 = A, 1 = B, etc.)
+            col: Column index (0-based, 0 = first column)
+            z: Optional z position in steps (if None, keeps current z)
+        """
+        x, y, z = self.get_well_position(row, col, z)
+        self.fresco_xyz.set_position(x, y, z)

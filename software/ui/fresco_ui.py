@@ -51,20 +51,30 @@ class PumpTraceView(tk.Frame):
         
         control_frame = tk.Frame(self)
         control_frame.pack(fill=tk.X, pady=5)
-        
+
         self.auto_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(control_frame, text="Auto", variable=self.auto_var).pack(side=tk.LEFT, padx=5)
-        
+        tk.Checkbutton(control_frame, text="Auto", variable=self.auto_var,
+                      command=self.on_mode_changed).pack(side=tk.LEFT, padx=5)
+
         self.sync_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(control_frame, text="Sync", variable=self.sync_var).pack(side=tk.LEFT, padx=5)
-        
+        tk.Checkbutton(control_frame, text="Sync", variable=self.sync_var,
+                      command=self.on_mode_changed).pack(side=tk.LEFT, padx=5)
+
         tk.Label(control_frame, text="Well:").pack(side=tk.LEFT)
         self.well_entry = tk.Entry(control_frame, width=6)
         self.well_entry.pack(side=tk.LEFT, padx=5)
         self.well_entry.bind('<Return>', lambda e: self.update_plot())
-        
+
+        self.well_label = tk.Label(control_frame, text="", font=("Arial", 9))
+        self.well_label.pack(side=tk.LEFT, padx=10)
+
         self.current_well = None
+        self.current_event_count = 0
         self.after(1000, self.update_loop)
+
+    def on_mode_changed(self):
+        self.current_event_count = 0  # Force update on next call
+        self.update_plot()
 
     def update_loop(self):
         self.update_plot()
@@ -78,12 +88,6 @@ class PumpTraceView(tk.Frame):
             if not well_label:
                 return
 
-        # Skip update if same well and no new pump events
-        if well_label == self.current_well:
-            return
-
-        self.current_well = well_label
-
         well = None
         for w in self.renderer.wells:
             if w.label == well_label:
@@ -92,78 +96,104 @@ class PumpTraceView(tk.Frame):
 
         if not well or not well.pump_events:
             return
-        
+
+        # Skip update if same well and no new pump events
+        event_count = len(well.pump_events)
+        if well_label == self.current_well and event_count == self.current_event_count:
+            return
+
+        self.current_well = well_label
+        self.current_event_count = event_count
+
         if self.sync_var.get():
             pump_data = self._build_synchronized_traces(well)
         else:
             pump_data = self._build_independent_traces(well)
-        
+
+        # Find min/max y values for synchronized y-axis scaling in Sync mode
+        min_y = 0
+        max_y = 0
+        if self.sync_var.get():
+            for pump_idx in range(8):
+                if pump_data[pump_idx]['y']:
+                    min_y = min(min_y, min(pump_data[pump_idx]['y']))
+                    max_y = max(max_y, max(pump_data[pump_idx]['y']))
+
         for pump_idx in range(8):
             ax = self.axes[pump_idx]
             ax.clear()
-            
+
             data = pump_data[pump_idx]
             if data['x']:
-                ax.plot(data['x'], data['y'], 'k-', linewidth=1.5)
-                
+                ax.plot(data['x'], data['y'], 'k-', linewidth=1.5, drawstyle='steps-post')
+
                 for idx in data['interruptions']:
                     if idx < len(data['x']):
-                        ax.axvline(x=data['x'][idx], color='red', linestyle='--', 
+                        ax.axvline(x=data['x'][idx], color='red', linestyle='--',
                                   linewidth=1, alpha=0.7)
-            
+
+            # Synchronize y-axis in Sync mode
+            if self.sync_var.get():
+                # Add 5% padding on both ends
+                y_range = max_y - min_y
+                padding = y_range * 0.05 if y_range > 0 else 1
+                ax.set_ylim(min_y - padding, max_y + padding)
+
             ax.set_ylabel(f'P{pump_idx}', rotation=0, labelpad=15, fontsize=9)
             ax.grid(True, alpha=0.3, linestyle=':')
             ax.tick_params(labelsize=7)
-            
+
             if pump_idx < 7:
                 ax.set_xticklabels([])
-        
+
         self.axes[7].set_xlabel('Event Sequence', fontsize=8)
-        self.fig.suptitle(f'Well {well_label}', fontsize=10, fontweight='bold')
+        self.well_label.config(text=f'Well {well_label}')
         self.canvas.draw()
     
     def _build_synchronized_traces(self, well):
         pump_data = {}
         for i in range(8):
             pump_data[i] = {'x': [], 'y': [], 'interruptions': []}
-        
+
         cumulative = [0] * 8
-        last_timestamp = None
-        
+        last_timestamp_per_pump = [None] * 8
+
         for event_seq, (timestamp, pump_idx, delta) in enumerate(well.pump_events):
-            if last_timestamp and (timestamp - last_timestamp) > 5.0:
-                for p in range(8):
-                    pump_data[p]['interruptions'].append(event_seq)
-            
+            # Check for gap in this specific pump's timeline
+            if last_timestamp_per_pump[pump_idx] is not None:
+                if (timestamp - last_timestamp_per_pump[pump_idx]) > 5.0:
+                    pump_data[pump_idx]['interruptions'].append(event_seq)
+
             cumulative[pump_idx] += delta
-            
+            last_timestamp_per_pump[pump_idx] = timestamp
+
             for p in range(8):
                 pump_data[p]['x'].append(event_seq)
                 pump_data[p]['y'].append(cumulative[p])
-            
-            last_timestamp = timestamp
-        
+
         return pump_data
     
     def _build_independent_traces(self, well):
         pump_data = {}
         for i in range(8):
             pump_data[i] = {'x': [], 'y': [], 'interruptions': []}
-        
+
         cumulative = [0] * 8
-        event_seq = 0
-        last_timestamp = None
-        
+        per_pump_event_seq = [0] * 8
+        last_timestamp_per_pump = [None] * 8
+
         for timestamp, pump_idx, delta in well.pump_events:
-            if last_timestamp and (timestamp - last_timestamp) > 5.0:
-                pump_data[pump_idx]['interruptions'].append(len(pump_data[pump_idx]['x']))
-            
+            # Check for gap in this specific pump's timeline
+            if last_timestamp_per_pump[pump_idx] is not None:
+                if (timestamp - last_timestamp_per_pump[pump_idx]) > 5.0:
+                    pump_data[pump_idx]['interruptions'].append(len(pump_data[pump_idx]['x']))
+
             cumulative[pump_idx] += delta
-            pump_data[pump_idx]['x'].append(event_seq)
+            pump_data[pump_idx]['x'].append(per_pump_event_seq[pump_idx])
             pump_data[pump_idx]['y'].append(cumulative[pump_idx])
-            event_seq += 1
-            last_timestamp = timestamp
-        
+            per_pump_event_seq[pump_idx] += 1
+            last_timestamp_per_pump[pump_idx] = timestamp
+
         return pump_data
 
 
@@ -215,11 +245,11 @@ class MainUI(Frame):
         tk.Button(btn_row, text='Serial Port', command=self.open_serial_connection_ui).pack(side=tk.LEFT, padx=2)
         tk.Button(btn_row, text='Change View', command=self.cycle_view).pack(side=tk.LEFT, padx=2)
         
-        self.view_label = tk.Label(btn_row, text=f"View: {self.view_modes[self.current_view_index]}", 
-                                   font=("Arial", 9, "bold"))
+        self.view_label = tk.Label(btn_row, text=f"View: {self.view_modes[self.current_view_index]}",
+                                   font=("Arial", 9))
         self.view_label.pack(side=tk.LEFT, padx=10)
         
-        tk.Label(btn_row, text="3D: +/- zoom, WASD rotate, C center, R reset",
+        tk.Label(btn_row, text="3D: +/- zoom, WASD rotate, Arrows pan, C center, R reset",
                 font=("Arial", 8), fg="gray").pack(side=tk.RIGHT, padx=5)
         
         image_array = self.camera.get_current_image()
@@ -272,7 +302,7 @@ class MainUI(Frame):
         
         tk.Button(ai_tab, text="Open Protocol Generator",
                  command=lambda: self.open_ai_generator(protocols_performer),
-                 font=("Arial", 10, "bold"), padx=20, pady=10).pack(pady=20)
+                 font=("Arial", 10), padx=20, pady=10).pack(pady=20)
         
         tk.Label(ai_tab, text="Generate protocols using AI\nfrom natural language descriptions",
                 font=("Arial", 9), fg="gray", wraplength=250, justify=tk.CENTER).pack(pady=10)
@@ -310,10 +340,21 @@ class MainUI(Frame):
     def handle_keypress(self, event):
         if self.camera != self.fresco_renderer:
             return
-        
-        key = event.char.lower()
 
-        if key == '+':
+        key = event.char.lower()
+        keysym = event.keysym
+
+        # Arrow keys for camera panning
+        if keysym == 'Left':
+            self.fresco_renderer.pan_left()
+        elif keysym == 'Right':
+            self.fresco_renderer.pan_right()
+        elif keysym == 'Up':
+            self.fresco_renderer.pan_up()
+        elif keysym == 'Down':
+            self.fresco_renderer.pan_down()
+        # Character keys for other controls
+        elif key == '+':
             self.fresco_renderer.zoom_in()
         elif key == '-':
             self.fresco_renderer.zoom_out()
