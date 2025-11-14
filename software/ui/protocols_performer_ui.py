@@ -19,9 +19,8 @@ class ProtocolsPerformerUI(Frame):
         header = Frame(self)
         header.pack(fill=tk.X, pady=(5, 10))
         
-        tk.Label(header, text="Protocol Executor", font=("Arial", 12, "bold")).pack(side=tk.LEFT)
-        tk.Button(header, text="Stop Protocol", command=self.stop_protocol, 
-                 bg="#ff4444", fg="white").pack(side=tk.RIGHT, padx=5)
+        tk.Label(header, text="Protocol Executor", font=("Arial", 12)).pack(side=tk.LEFT)
+        tk.Button(header, text="Stop Protocol", command=self.stop_protocol).pack(side=tk.RIGHT, padx=5)
         tk.Button(header, text="Refresh List", command=self.refresh).pack(side=tk.RIGHT)
         
         # Protocol selection
@@ -41,13 +40,12 @@ class ProtocolsPerformerUI(Frame):
         btn_frame = Frame(self)
         btn_frame.pack(pady=15)
         
-        self.run_btn = tk.Button(btn_frame, text="Run Protocol", command=self.start_protocol, 
-                                 font=("Arial", 10, "bold"), padx=20, pady=10,
-                                 bg="#4CAF50", fg="white")
+        self.run_btn = tk.Button(btn_frame, text="Run Protocol", command=self.start_protocol,
+                                 font=("Arial", 10), padx=20, pady=10)
         self.run_btn.pack()
-        
+
         # Status
-        self.status_label = tk.Label(self, text="Ready", fg="blue", font=("Arial", 9))
+        self.status_label = tk.Label(self, text="Ready", font=("Arial", 9))
         self.status_label.pack(pady=5)
         
         # Execution log

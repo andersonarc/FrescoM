@@ -13,18 +13,19 @@ class BaseProtocol:
         self.fresco_xyz = fresco_xyz
         self.z_camera = z_camera
         self.images_storage = images_storage
-        
+        self.protocol_controller = None
+
         if fresco_xyz.renderer:
-            cfg = fresco_xyz.renderer.PLATE_CONFIG
+            cfg = fresco_xyz.renderer.plate_config
             self.plate_rows = cfg['rows']
             self.plate_cols = cfg['cols']
             self.well_spacing_mm = cfg['well_spacing']
-            self.well_step = int(self.well_spacing_mm * 200)
+            self.well_spacing_steps = int(self.well_spacing_mm * 200)
         else:
             self.plate_rows = 8
             self.plate_cols = 12
             self.well_spacing_mm = 9.0
-            self.well_step = 1800
+            self.well_spacing_steps = 1800
         
         self.plate_size_96 = (self.plate_cols, self.plate_rows)
 
@@ -33,3 +34,11 @@ class BaseProtocol:
 
     def hold_position(self, seconds):
         time.sleep(seconds)
+        self.check_pause_stop()
+
+    def check_pause_stop(self):
+        if self.protocol_controller:
+            while self.protocol_controller.protocol_paused:
+                time.sleep(0.1)
+            if self.protocol_controller.protocol_stop_requested:
+                raise InterruptedError("Protocol stopped by user")

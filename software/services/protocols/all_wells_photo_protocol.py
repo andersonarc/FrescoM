@@ -41,6 +41,6 @@ class AllWellsPhotoProtocol(BaseProtocol):
                 image_after_solution = self.z_camera.fresco_camera.get_current_image()
                 self.images_storage.save(image_after_solution,
                                          session_folder_path + '/' + 'PI_a_' + str(row_number) + '_' + str(column_number) + '.png')
-                self.fresco_xyz.delta(-1 * self.well_step_96, 0, 0)
-            self.fresco_xyz.delta(self.well_step_96 * (self.plate_size_96[0] - 1), 0, 0)
-            self.fresco_xyz.delta(0, -1 * self.well_step_96, 0)
+                self.fresco_xyz.delta(-1 * self.well_spacing_steps, 0, 0)
+            self.fresco_xyz.delta(self.well_spacing_steps * (self.plate_size_96[0] - 1), 0, 0)
+            self.fresco_xyz.delta(0, -1 * self.well_spacing_steps, 0)

@@ -40,8 +40,10 @@ def main():
     
     # Link renderer to xyz for collision detection
     fresco_xyz.renderer = fresco_renderer
-    
-    z_camera = ZCamera(None if args.virtual else BaseCamera(), fresco_renderer)
+
+    # In virtual mode, use renderer as camera fallback
+    fresco_camera = None if args.virtual else BaseCamera()
+    z_camera = ZCamera(fresco_xyz, fresco_camera, fresco_renderer)
     
     # Create UI
     root = Tk()

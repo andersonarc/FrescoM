@@ -62,6 +62,13 @@ class FrescoXYZ:
                 self.virtual_position['x'] += dx
                 self.virtual_position['y'] += dy
                 self.virtual_position['z'] += dz
+
+                if self.renderer:
+                    x_mm = self.virtual_position['x'] / self.STEPS_PER_MM
+                    y_mm = self.virtual_position['y'] / self.STEPS_PER_MM
+                    z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                    self.renderer.record_position(x_mm, y_mm, z_mm)
+
                 logging.info(f"[Emulator] Delta ({dx}, {dy}, {dz}) -> {self.virtual_position}")
             except ValueError:
                 pass
@@ -94,12 +101,26 @@ class FrescoXYZ:
             try:
                 x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
                 self.virtual_position = {'x': x, 'y': y, 'z': z}
+
+                if self.renderer:
+                    x_mm = self.virtual_position['x'] / self.STEPS_PER_MM
+                    y_mm = self.virtual_position['y'] / self.STEPS_PER_MM
+                    z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                    self.renderer.record_position(x_mm, y_mm, z_mm)
+
                 logging.info(f"[Emulator] SetPosition -> {self.virtual_position}")
             except ValueError:
                 pass
 
         elif cmd == "Zero":
-            self.virtual_position = {'x': 0, 'y': 0, 'z': self.SAFE_DEFAULT_Z}
+            self.virtual_position = {'x': self.plate['bottom_left'][0], 'y': self.plate['bottom_left'][1], 'z': self.SAFE_DEFAULT_Z}
+
+            if self.renderer:
+                x_mm = self.virtual_position['x'] / self.STEPS_PER_MM
+                y_mm = self.virtual_position['y'] / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
+
             logging.info("[Emulator] Zero XYZ (raised to safe height)")
 
         elif cmd == "ManifoldZero":
@@ -108,6 +129,13 @@ class FrescoXYZ:
 
         elif cmd == "VerticalZero":
             self.virtual_position['z'] = self.SAFE_DEFAULT_Z
+
+            if self.renderer:
+                x_mm = self.virtual_position['x'] / self.STEPS_PER_MM
+                y_mm = self.virtual_position['y'] / self.STEPS_PER_MM
+                z_mm = -self.virtual_position['z'] / self.STEPS_PER_MM
+                self.renderer.record_position(x_mm, y_mm, z_mm)
+
             logging.info("[Emulator] Zero Z (raised to safe height)")
 
         elif cmd == "GetTopLeftBottomRightCoordinates":
@@ -115,12 +143,32 @@ class FrescoXYZ:
             return f"OK {self.topLeftPosition[0]} {self.topLeftPosition[1]} {self.bottomRightPosition[0]} {self.bottomRightPosition[1]}"
 
         elif cmd == "RememberTopLeft":
-            self.topLeftPosition = (int(self.virtual_position['x']), int(self.virtual_position['y']))
-            logging.info(f"[Emulator] Saved TopLeft: {self.topLeftPosition}")
+            curr_x = int(self.virtual_position['x'])
+            curr_y = int(self.virtual_position['y'])
+            self.topLeftPosition = (curr_x, curr_y)
+
+            # Top-left well should be at bottom_left.x, top_right.y
+            old_bottom_left = self.plate['bottom_left']
+            old_top_right = self.plate['top_right']
+            self.plate['bottom_left'] = (curr_x, old_bottom_left[1])
+            self.plate['top_right'] = (old_top_right[0], curr_y)
+
+            logging.info(f"[Emulator] Remembered top-left position: ({curr_x}, {curr_y})")
+            logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
 
         elif cmd == "RememberBottomRight":
-            self.bottomRightPosition = (int(self.virtual_position['x']), int(self.virtual_position['y']))
-            logging.info(f"[Emulator] Saved BottomRight: {self.bottomRightPosition}")
+            curr_x = int(self.virtual_position['x'])
+            curr_y = int(self.virtual_position['y'])
+            self.bottomRightPosition = (curr_x, curr_y)
+
+            # Bottom-right well should be at top_right.x, bottom_left.y
+            old_bottom_left = self.plate['bottom_left']
+            old_top_right = self.plate['top_right']
+            self.plate['bottom_left'] = (old_bottom_left[0], curr_y)
+            self.plate['top_right'] = (curr_x, old_top_right[1])
+
+            logging.info(f"[Emulator] Remembered bottom-right position: ({curr_x}, {curr_y})")
+            logging.info(f"[Emulator] Plate bounds: bottom_left={self.plate['bottom_left']}, top_right={self.plate['top_right']}")
 
         elif cmd == "SwitchLedW" and len(parts) >= 2:
             self.white_led_on = parts[1] == "1"
@@ -140,27 +188,30 @@ class FrescoXYZ:
         x_mm = new_pos_steps['x'] / self.STEPS_PER_MM
         y_mm = new_pos_steps['y'] / self.STEPS_PER_MM
         z_mm = -new_pos_steps['z'] / self.STEPS_PER_MM
-        
-        max_x = self.renderer.plate_width / 2 + 15
-        max_y = self.renderer.plate_height / 2 + 15
-        
+
+        margin = 15
+        min_x = -margin
+        min_y = -margin
+        max_x = self.renderer.plate_width + margin
+        max_y = self.renderer.plate_height + margin
+
         warnings = []
-        
-        if abs(x_mm) > max_x:
-            warnings.append(f"X out of bounds: {x_mm:.1f}mm (max +/-{max_x:.1f}mm)")
-        if abs(y_mm) > max_y:
-            warnings.append(f"Y out of bounds: {y_mm:.1f}mm (max +/-{max_y:.1f}mm)")
+
+        if x_mm < min_x or x_mm > max_x:
+            warnings.append(f"X out of bounds: {x_mm:.1f}mm (range {min_x:.1f} to {max_x:.1f}mm)")
+        if y_mm < min_y or y_mm > max_y:
+            warnings.append(f"Y out of bounds: {y_mm:.1f}mm (range {min_y:.1f} to {max_y:.1f}mm)")
         
         well = self.renderer.get_well_at_position(x_mm, y_mm)
-        manifold_z_mm = -self.virtual_manifold_position / self.STEPS_PER_MM
-        tip_z = manifold_z_mm + 20.0
-        
+        manifold_z_mm = z_mm - (self.virtual_manifold_position / self.STEPS_PER_MM)
+        tip_z = manifold_z_mm - 20.0
+
         plate_top = self.renderer.plate_config['plate_thickness']
-        
+
         if well is None and tip_z > -2.0 and tip_z < plate_top + 2.0:
             warnings.append(f"Manifold tip near plate surface at Z={tip_z:.1f}mm")
-        elif well and tip_z > (plate_top - well.depth + 2.0):
-            warnings.append(f"Manifold tip near well {well.label} bottom")
+        elif well and tip_z < (plate_top - well.depth - 0.5):
+            warnings.append(f"Manifold tip penetrating well {well.label} bottom")
         
         self.renderer.collision_state = bool(warnings)
         

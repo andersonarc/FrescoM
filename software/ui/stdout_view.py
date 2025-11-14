@@ -25,38 +25,59 @@ class StdoutView:
         self.width = 800
         self.height = 800
         self.text_buffer = []
-        self.max_lines = 1000
-        
+        self.max_lines = 2000
+        self.lock = threading.Lock()
+
     def add_text(self, text):
-        self.text_buffer.append(text)
-        if len(self.text_buffer) > self.max_lines:
-            self.text_buffer.pop(0)
-    
+        import time
+        timestamp = time.strftime("%H:%M:%S")
+        with self.lock:
+            for line in text.split('\n'):
+                if line.strip():
+                    self.text_buffer.append((timestamp, line))
+            if len(self.text_buffer) > self.max_lines:
+                self.text_buffer = self.text_buffer[-self.max_lines:]
+
     def get_current_image(self):
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
-        
-        img = Image.new('RGB', (self.width, self.height), color='black')
+
+        img = Image.new('RGB', (self.width, self.height), color='#1e1e1e')
         draw = ImageDraw.Draw(img)
-        
+
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 12)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 11)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9)
         except:
             font = ImageFont.load_default()
-        
+            font_small = ImageFont.load_default()
+
         y_offset = 10
-        line_height = 15
-        
-        # Show last lines that fit
-        visible_lines = (self.height - 20) // line_height
-        start_idx = max(0, len(self.text_buffer) - visible_lines)
-        
-        for line in self.text_buffer[start_idx:]:
+        line_height = 14
+
+        with self.lock:
+            visible_lines = (self.height - 20) // line_height
+            start_idx = max(0, len(self.text_buffer) - visible_lines)
+            buffer_copy = list(self.text_buffer[start_idx:])
+
+        for timestamp, line in buffer_copy:
             if y_offset >= self.height - line_height:
                 break
-            draw.text((10, y_offset), line.strip()[:100], fill='white', font=font)
+
+            color = '#d4d4d4'
+            if 'ERROR' in line.upper() or 'FAIL' in line.upper():
+                color = '#f48771'
+            elif 'WARNING' in line.upper() or 'WARN' in line.upper():
+                color = '#dcdcaa'
+            elif 'SUCCESS' in line.upper() or 'OK' in line.upper():
+                color = '#4ec9b0'
+            elif 'INFO' in line.upper():
+                color = '#9cdcfe'
+
+            draw.text((10, y_offset), timestamp, fill='#6a9955', font=font_small)
+            draw.text((70, y_offset), line.strip()[:120], fill=color, font=font)
             y_offset += line_height
-        
+
         return np.array(img)
     
     def should_update_frequently(self):

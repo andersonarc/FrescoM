@@ -64,11 +64,11 @@ class PumpTraceView(tk.Frame):
         self.well_entry.bind('<Return>', lambda e: self.update_plot())
         
         self.current_well = None
-        self.after(50, self.update_loop)
-    
+        self.after(1000, self.update_loop)
+
     def update_loop(self):
         self.update_plot()
-        self.after(50, self.update_loop)
+        self.after(1000, self.update_loop)
     
     def update_plot(self):
         if self.auto_var.get() and self.renderer.current_well:
@@ -77,16 +77,20 @@ class PumpTraceView(tk.Frame):
             well_label = self.well_entry.get().upper()
             if not well_label:
                 return
-        
+
+        # Skip update if same well and no new pump events
+        if well_label == self.current_well:
+            return
+
         self.current_well = well_label
-        
+
         well = None
         for w in self.renderer.wells:
             if w.label == well_label:
                 well = w
                 break
-        
-        if not well:
+
+        if not well or not well.pump_events:
             return
         
         if self.sync_var.get():

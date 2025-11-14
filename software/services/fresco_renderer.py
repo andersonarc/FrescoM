@@ -4,6 +4,7 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 import numpy as np
 import logging
+import threading
 from plates import get_plate_config, STEPS_PER_MM
 
 
@@ -54,27 +55,28 @@ class FrescoRenderer:
         self.label_font = pygame.font.SysFont('Arial', 24, bold=True)
         
         self._init_opengl()
-        
+
         self.camera_distance = 250.0
         self.camera_elevation = 30.0
         self.camera_azimuth = 45.0
         self.zoom_level = 1.0
-        self.target_position = {'x': 0.0, 'y': 0.0, 'z': 0.0}
-        
+        self.target_position = {'x': self.plate_width / 2, 'y': self.plate_height / 2, 'z': 0.0}
+
         self.wells = self._create_wells()
         self.current_well = None
-        
+
         self.position_history = []
+        self.position_lock = threading.Lock()
         self.frame_count = 0
         self.last_render_pos = None
         self.is_moving = False
         self.collision_state = False
-        
+
         self.pump_colors = [
             (1.0, 0.3, 0.3), (0.3, 1.0, 0.3), (0.3, 0.3, 1.0), (1.0, 1.0, 0.3),
             (1.0, 0.3, 1.0), (0.3, 1.0, 1.0), (1.0, 0.6, 0.3), (0.6, 0.3, 1.0),
         ]
-        
+
         logging.info(f"Renderer initialized with {plate_type} plate")
     
     def _init_opengl(self):
@@ -95,21 +97,31 @@ class FrescoRenderer:
     def _create_wells(self):
         cfg = self.plate_config
         wells = []
-        
-        half_width = self.plate_width / 2
-        half_height = self.plate_height / 2
+
         well_radius = cfg['well_diameter'] / 2
-        
+
         for row in range(cfg['rows']):
             for col in range(cfg['cols']):
-                x = -half_width + col * cfg['well_spacing']
-                y = -half_height + row * cfg['well_spacing']
+                x = col * cfg['well_spacing']
+                y = row * cfg['well_spacing']
                 label = f"{cfg['row_labels'][row]}{col + 1}"
                 well = Well(row, col, x, y, well_radius, cfg['well_depth'], label)
                 wells.append(well)
-        
+
         return wells
-    
+
+    def record_position(self, x_mm, y_mm, z_mm):
+        """Record position in trajectory (called by fresco_xyz on movement)."""
+        pos = {'x': self.plate_width - x_mm, 'y': self.plate_height - y_mm, 'z': z_mm}
+        with self.position_lock:
+            if (not self.position_history or
+                abs(pos['x'] - self.position_history[-1]['x']) > 0.001 or
+                abs(pos['y'] - self.position_history[-1]['y']) > 0.001 or
+                abs(pos['z'] - self.position_history[-1]['z']) > 0.001):
+                self.position_history.append(pos)
+                if len(self.position_history) > self.TRAJECTORY_MAX_POINTS:
+                    self.position_history.pop(0)
+
     def get_well_at_position(self, x_mm, y_mm):
         for well in self.wells:
             if well.contains_point(x_mm, y_mm):
@@ -122,34 +134,36 @@ class FrescoRenderer:
             logging.info(f"Pump event recorded: Well {self.current_well.label}, Pump {pump_index}, Volume {volume}")
     
     def get_current_image(self):
+        robot_pos_physical = self._get_robot_position_physical()
         robot_pos = self._get_robot_position()
-        self.current_well = self.get_well_at_position(robot_pos['x'], robot_pos['y'])
-        
+        self.current_well = self.get_well_at_position(robot_pos_physical['x'], robot_pos_physical['y'])
+
         led_color = self._get_led_color()
         self._update_position_history(robot_pos)
-        
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        
+
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
-        
+
         camera_x = self.target_position['x'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.sin(np.radians(self.camera_azimuth))
         camera_y = self.target_position['y'] + self.camera_distance * np.cos(np.radians(self.camera_elevation)) * np.cos(np.radians(self.camera_azimuth))
         camera_z = self.target_position['z'] + self.camera_distance * np.sin(np.radians(self.camera_elevation))
-        
+
         gluLookAt(
             camera_x / self.zoom_level, camera_y / self.zoom_level, camera_z / self.zoom_level,
             self.target_position['x'], self.target_position['y'], self.target_position['z'],
             0, 0, 1
         )
-        
+
         self._draw_scene(robot_pos, led_color)
-        
+
+        # Read from front buffer (working in original commit)
         glReadBuffer(GL_FRONT)
         pixels = glReadPixels(0, 0, self.width, self.height, GL_RGB, GL_UNSIGNED_BYTE)
         image = np.frombuffer(pixels, dtype=np.uint8).reshape(self.height, self.width, 3)
         image = np.flipud(image)
-        
+
         self.frame_count += 1
         return image
     
@@ -162,55 +176,32 @@ class FrescoRenderer:
     
     def _draw_plate_with_cells(self):
         cfg = self.plate_config
-        half_width = self.plate_width / 2
-        half_height = self.plate_height / 2
-        margin = 10.0
         thickness = cfg['plate_thickness']
         depth = cfg['well_depth']
-        
-        # Plate edges only
-        glColor4f(0.8, 0.8, 0.8, 0.9)
-        edges = [
-            [(-half_width - margin, -half_height - margin), (half_width + margin, -half_height - margin)],
-            [(-half_width - margin, half_height + margin), (half_width + margin, half_height + margin)],
-            [(-half_width - margin, -half_height - margin), (-half_width - margin, half_height + margin)],
-            [(half_width + margin, -half_height - margin), (half_width + margin, half_height + margin)]
-        ]
-        
-        for (x1, y1), (x2, y2) in edges:
-            glBegin(GL_QUADS)
-            glVertex3f(x1, y1, 0)
-            glVertex3f(x2, y2, 0)
-            glVertex3f(x2, y2, thickness)
-            glVertex3f(x1, y1, thickness)
-            glEnd()
-        
-        # Draw cells with indented wells
+
+        min_x = 0
+        min_y = 0
+        max_x = self.plate_width
+        max_y = self.plate_height
+
         for well in self.wells:
             is_current = (well == self.current_well)
             self._draw_cell_with_well(well, is_current, thickness, depth)
-        
-        # Plate border
-        glColor3f(0.2, 0.2, 0.2)
-        glLineWidth(2.0)
-        glBegin(GL_LINE_LOOP)
-        glVertex3f(-half_width - margin, -half_height - margin, thickness)
-        glVertex3f(half_width + margin, -half_height - margin, thickness)
-        glVertex3f(half_width + margin, half_height + margin, thickness)
-        glVertex3f(-half_width - margin, half_height + margin, thickness)
-        glEnd()
     
     def _draw_cell_with_well(self, well, is_current, plate_thickness, well_depth):
         cfg = self.plate_config
-        cell_size = cfg['well_spacing'] * 0.45
+        cell_half_size = cfg['well_spacing'] / 2
         segments = self.WELL_SEGMENTS
-        
-        cx, cy = well.center_x, well.center_y
+
+        plate_thickness = plate_thickness * 0.5
+
+        cx = self.plate_width - well.center_x
+        cy = self.plate_height - well.center_y
         z_plate_bottom = 0.0
         z_plate_top = plate_thickness
         z_well_rim = plate_thickness
         z_well_bottom = plate_thickness - well_depth
-        
+
         if is_current:
             well_color = (0.5, 0.7, 1.0, 0.9)
             cell_color = (0.75, 0.75, 0.75, 0.95)
@@ -220,7 +211,7 @@ class FrescoRenderer:
             cell_color = (0.7, 0.7, 0.7, 0.95)
             outline_color = (0.3, 0.3, 0.3)
             outline_width = 1.0
-            
+
             if well.pump_events:
                 import time
                 current_time = time.time()
@@ -233,62 +224,77 @@ class FrescoRenderer:
                     well_color = (0.3, 0.3, 0.3, 0.9)
             else:
                 well_color = (0.3, 0.3, 0.3, 0.9)
-        
+
         glColor4f(*cell_color)
-        
-        for i in range(segments):
-            angle1 = 2.0 * np.pi * i / segments
-            angle2 = 2.0 * np.pi * (i + 1) / segments
-            
+
+        x_min = cx - cell_half_size
+        x_max = cx + cell_half_size
+        y_min = cy - cell_half_size
+        y_max = cy + cell_half_size
+
+        corner_segments = 32
+        for i in range(corner_segments):
+            angle1 = 2.0 * np.pi * i / corner_segments
+            angle2 = 2.0 * np.pi * (i + 1) / corner_segments
+
+            edge_r = cell_half_size * 1.5
+            x_outer1 = cx + edge_r * np.cos(angle1)
+            y_outer1 = cy + edge_r * np.sin(angle1)
+            x_outer2 = cx + edge_r * np.cos(angle2)
+            y_outer2 = cy + edge_r * np.sin(angle2)
+
+            x_outer1 = max(x_min, min(x_max, x_outer1))
+            y_outer1 = max(y_min, min(y_max, y_outer1))
+            x_outer2 = max(x_min, min(x_max, x_outer2))
+            y_outer2 = max(y_min, min(y_max, y_outer2))
+
             x_inner1 = cx + well.radius * np.cos(angle1)
             y_inner1 = cy + well.radius * np.sin(angle1)
             x_inner2 = cx + well.radius * np.cos(angle2)
             y_inner2 = cy + well.radius * np.sin(angle2)
-            
-            x_outer1 = cx + (cell_size * 1.5) * np.cos(angle1)
-            y_outer1 = cy + (cell_size * 1.5) * np.sin(angle1)
-            x_outer2 = cx + (cell_size * 1.5) * np.cos(angle2)
-            y_outer2 = cy + (cell_size * 1.5) * np.sin(angle2)
-            
-            x_outer1 = np.clip(x_outer1, cx - cell_size, cx + cell_size)
-            y_outer1 = np.clip(y_outer1, cy - cell_size, cy + cell_size)
-            x_outer2 = np.clip(x_outer2, cx - cell_size, cx + cell_size)
-            y_outer2 = np.clip(y_outer2, cy - cell_size, cy + cell_size)
-            
+
             glBegin(GL_QUADS)
-            glVertex3f(x_outer1, y_outer1, z_plate_top)
+            glVertex3f(x_inner1, y_inner1, z_plate_top)
+            glVertex3f(x_inner2, y_inner2, z_plate_top)
             glVertex3f(x_outer2, y_outer2, z_plate_top)
-            glVertex3f(x_inner2, y_inner2, z_well_rim)
-            glVertex3f(x_inner1, y_inner1, z_well_rim)
+            glVertex3f(x_outer1, y_outer1, z_plate_top)
             glEnd()
-        
-        corners = [
-            (cx - cell_size, cy - cell_size),
-            (cx + cell_size, cy - cell_size),
-            (cx + cell_size, cy + cell_size),
-            (cx - cell_size, cy + cell_size)
-        ]
-        for i in range(4):
-            x1, y1 = corners[i]
-            x2, y2 = corners[(i + 1) % 4]
+
             glBegin(GL_QUADS)
-            glVertex3f(x1, y1, z_plate_bottom)
-            glVertex3f(x2, y2, z_plate_bottom)
-            glVertex3f(x2, y2, z_plate_top)
-            glVertex3f(x1, y1, z_plate_top)
+            glVertex3f(x_inner1, y_inner1, z_plate_bottom)
+            glVertex3f(x_inner2, y_inner2, z_plate_bottom)
+            glVertex3f(x_outer2, y_outer2, z_plate_bottom)
+            glVertex3f(x_outer1, y_outer1, z_plate_bottom)
             glEnd()
-        
+
+        for i in range(4):
+            if i == 0:
+                vx1, vy1, vx2, vy2 = x_min, y_min, x_max, y_min
+            elif i == 1:
+                vx1, vy1, vx2, vy2 = x_max, y_min, x_max, y_max
+            elif i == 2:
+                vx1, vy1, vx2, vy2 = x_max, y_max, x_min, y_max
+            else:
+                vx1, vy1, vx2, vy2 = x_min, y_max, x_min, y_min
+
+            glBegin(GL_QUADS)
+            glVertex3f(vx1, vy1, z_plate_bottom)
+            glVertex3f(vx2, vy2, z_plate_bottom)
+            glVertex3f(vx2, vy2, z_plate_top)
+            glVertex3f(vx1, vy1, z_plate_top)
+            glEnd()
+
         glColor4f(*well_color)
-        
+
         glBegin(GL_TRIANGLE_FAN)
-        glVertex3f(cx, cy, z_well_bottom)
+        glVertex3f(cx, cy, z_well_rim)
         for i in range(segments + 1):
             angle = 2.0 * np.pi * i / segments
             glVertex3f(cx + well.radius * np.cos(angle),
                       cy + well.radius * np.sin(angle),
-                      z_well_bottom)
+                      z_well_rim)
         glEnd()
-        
+
         glBegin(GL_QUAD_STRIP)
         for i in range(segments + 1):
             angle = 2.0 * np.pi * i / segments
@@ -297,7 +303,7 @@ class FrescoRenderer:
             glVertex3f(x, y, z_well_rim)
             glVertex3f(x, y, z_well_bottom)
         glEnd()
-        
+
         glColor3f(*outline_color)
         glLineWidth(outline_width)
         glBegin(GL_LINE_LOOP)
@@ -309,20 +315,40 @@ class FrescoRenderer:
         glEnd()
     
     def _draw_well_labels(self):
-        pass
+        cfg = self.plate_config
+        plate_thickness = cfg['plate_thickness']
+        label_z = plate_thickness + 0.1
+
+        drawn_rows = set()
+        drawn_cols = set()
+
+        for well in self.wells:
+            if well.row not in drawn_rows:
+                row_label = cfg['row_labels'][well.row]
+                label_x = self.plate_width + 8.0
+                label_y = self.plate_height - well.center_y
+                self._draw_text_3d(row_label, label_x, label_y, label_z, scale=10.0)
+                drawn_rows.add(well.row)
+
+            if well.col not in drawn_cols:
+                col_label = str(well.col + 1)
+                label_x = self.plate_width - well.center_x
+                label_y = self.plate_height + 8.0
+                self._draw_text_3d(col_label, label_x, label_y, label_z, scale=10.0)
+                drawn_cols.add(well.col)
     
     def _draw_text_3d(self, text, x, y, z, scale=1.0):
         glPushMatrix()
         glTranslatef(x, y, z)
         glScalef(scale, scale, scale)
-        
+
         glColor3f(0.2, 0.2, 0.2)
         glLineWidth(2.0)
-        
-        char_width = 0.5
+
+        char_width = 0.35 if len(text) >= 2 else 0.5
         for i, char in enumerate(text):
             self._draw_character(char, i * char_width, 0)
-        
+
         glPopMatrix()
     
     def _draw_character(self, char, offset_x, offset_y):
@@ -365,12 +391,24 @@ class FrescoRenderer:
                 glVertex3f(offset_x + x2, offset_y + y2, 0)
             glEnd()
     
-    def _get_robot_position(self):
+    def _get_robot_position_physical(self):
+        """Get robot position in physical coordinates (not flipped)."""
         if self.fresco_xyz and hasattr(self.fresco_xyz, 'virtual_position'):
             pos = self.fresco_xyz.virtual_position.copy()
             return {
                 'x': pos['x'] / STEPS_PER_MM,
                 'y': pos['y'] / STEPS_PER_MM,
+                'z': -pos['z'] / STEPS_PER_MM
+            }
+        return {'x': 0.0, 'y': 0.0, 'z': 0.0}
+
+    def _get_robot_position(self):
+        """Get robot position in display coordinates (flipped for rendering)."""
+        if self.fresco_xyz and hasattr(self.fresco_xyz, 'virtual_position'):
+            pos = self.fresco_xyz.virtual_position.copy()
+            return {
+                'x': self.plate_width - (pos['x'] / STEPS_PER_MM),
+                'y': self.plate_height - (pos['y'] / STEPS_PER_MM),
                 'z': -pos['z'] / STEPS_PER_MM
             }
         return {'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -393,26 +431,24 @@ class FrescoRenderer:
             return (0.3, 0.3, 0.3)
     
     def _update_position_history(self, current_pos):
-        self.position_history.append(current_pos.copy())
-        if len(self.position_history) > self.TRAJECTORY_MAX_POINTS:
-            self.position_history.pop(0)
-        
         if self.last_render_pos is not None:
             dx = abs(current_pos['x'] - self.last_render_pos['x'])
             dy = abs(current_pos['y'] - self.last_render_pos['y'])
             dz = abs(current_pos['z'] - self.last_render_pos['z'])
-            self.is_moving = (dx > 0.1 or dy > 0.1 or dz > 0.1)
-        
+            self.is_moving = (dx > 0.01 or dy > 0.01 or dz > 0.01)
+
         self.last_render_pos = current_pos.copy()
     
     def _draw_trajectory(self):
-        if len(self.position_history) < 2:
-            return
-        
+        with self.position_lock:
+            if len(self.position_history) < 2:
+                return
+            trajectory_copy = list(self.position_history)
+
         glColor4f(0.1, 0.3, 0.9, 0.6)
         glLineWidth(2.0)
         glBegin(GL_LINE_STRIP)
-        for pos in self.position_history:
+        for pos in trajectory_copy:
             glVertex3f(pos['x'], pos['y'], pos['z'])
         glEnd()
     
@@ -454,9 +490,9 @@ class FrescoRenderer:
     def _draw_manifold(self, robot_pos):
         if not self.fresco_xyz or not hasattr(self.fresco_xyz, 'virtual_manifold_position'):
             return
-        
-        manifold_z = -self.fresco_xyz.virtual_manifold_position / STEPS_PER_MM
-        tip_z = manifold_z + self.MANIFOLD_TIP_LENGTH
+
+        manifold_z = robot_pos['z'] - (self.fresco_xyz.virtual_manifold_position / STEPS_PER_MM)
+        tip_z = manifold_z - self.MANIFOLD_TIP_LENGTH
         
         glColor4f(0.8, 0.5, 0.2, 0.7)
         glLineWidth(3.0)
@@ -496,7 +532,7 @@ class FrescoRenderer:
         self.camera_elevation = 30.0
         self.camera_azimuth = 45.0
         self.zoom_level = 1.0
-        self.target_position = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.target_position = {'x': self.plate_width / 2, 'y': self.plate_height / 2, 'z': 0.0}
     
     def should_update_frequently(self):
         return self.is_moving

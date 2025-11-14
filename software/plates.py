@@ -51,8 +51,8 @@ def get_plate_config(plate_type: str) -> dict:
 
     # Derived properties
     scale = base['steps_per_well']
-    base['bottom_left'] = (base['cols'] / 2 * scale, base['rows'] / 2 * scale)
-    base['top_right'] = (- base['cols'] / 2 * scale, - base['rows'] / 2 * scale)
+    base['bottom_left'] = (0, 0)
+    base['top_right'] = ((base['cols'] - 1) * scale, (base['rows'] - 1) * scale)
     return base
 
 def get_available_plate_types() -> list:

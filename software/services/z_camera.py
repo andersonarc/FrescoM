@@ -7,14 +7,19 @@ import time
 
 class ZCamera:
 
-    def __init__(self, fresco_xyz: FrescoXYZ, fresco_camera: FrescoCamera):
+    def __init__(self, fresco_xyz: FrescoXYZ, fresco_camera: FrescoCamera, renderer=None):
         self.frescoXYZ = fresco_xyz
-        self.fresco_camera = fresco_camera
+        self._camera = fresco_camera
+        self._renderer = renderer
         self.focus_measure = FocusMeasure()
         self.auto_focus_anchor = -9690 # TODO: save from machine state and update
         self.auto_focus_delta_number_of_jumps = 30
         self.one_jump = 5
         self.current_position = None
+
+    @property
+    def fresco_camera(self):
+        return self._camera if self._camera is not None else self._renderer
 
     def z_step_up(self):
         delta = -1 * self.one_step

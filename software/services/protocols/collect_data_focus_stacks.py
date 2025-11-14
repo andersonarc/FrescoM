@@ -57,8 +57,8 @@ class CollectDataFocusStacks(BaseProtocol):
                 one_well_folder = session_folder_path + '/' + str(column_number) + '_' + str(row_number)
                 self.images_storage.create_folder(one_well_folder)
                 self.perform_for_one_well(one_well_folder)
-            self.fresco_xyz.delta(self.well_step_96 * (self.plate_size_96[0] - 1), 0, 0)
-            self.fresco_xyz.delta(0, -1 * self.well_step_96, 0)
+            self.fresco_xyz.delta(self.well_spacing_steps * (self.plate_size_96[0] - 1), 0, 0)
+            self.fresco_xyz.delta(0, -1 * self.well_spacing_steps, 0)
 
     # creates images for one well
     def perform_for_one_well(self, well_folder_path):
