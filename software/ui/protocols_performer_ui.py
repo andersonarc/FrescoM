@@ -7,10 +7,11 @@ import _thread
 
 class ProtocolsPerformerUI(Frame):
 
-    def __init__(self, master, protocols_performer: ProtocolsPerformer):
+    def __init__(self, master, protocols_performer: ProtocolsPerformer, time_scale_var=None):
         super().__init__(master=master)
         self.protocols_performer = protocols_performer
         self.protocols_combobox: Combobox = None
+        self.external_time_scale_var = time_scale_var
         self.init_ui()
 
     def init_ui(self):
@@ -18,7 +19,7 @@ class ProtocolsPerformerUI(Frame):
         
         header = Frame(self)
         header.pack(fill=tk.X, pady=(5, 10))
-        
+
         tk.Label(header, text="Protocol Performer", font=("Arial", 12)).pack(side=tk.LEFT)
         tk.Button(header, text="Stop Protocol", command=self.stop_protocol).pack(side=tk.RIGHT, padx=5)
         tk.Button(header, text="Refresh List", command=self.refresh).pack(side=tk.RIGHT)
@@ -35,7 +36,23 @@ class ProtocolsPerformerUI(Frame):
         if list_of_protocols:
             self.protocols_combobox.current(0)
         self.protocols_combobox.pack(fill=tk.X)
-        
+
+        # Time scale control (use external if provided, otherwise create local)
+        if self.external_time_scale_var is None:
+            timescale_frame = Frame(self)
+            timescale_frame.pack(fill=tk.X, padx=10, pady=10)
+
+            tk.Label(timescale_frame, text="Timescale:", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 5))
+
+            self.time_scale_var = tk.DoubleVar(value=1.0)
+            time_scale_entry = tk.Entry(timescale_frame, textvariable=self.time_scale_var, width=8)
+            time_scale_entry.pack(side=tk.LEFT, padx=5)
+
+            tk.Label(timescale_frame, text="(0.1 = 10x faster, 1.0 = real-time, 2.0 = 2x slower)",
+                    font=("Arial", 8), fg="gray").pack(side=tk.LEFT, padx=5)
+        else:
+            self.time_scale_var = self.external_time_scale_var
+
         # Run button
         btn_frame = Frame(self)
         btn_frame.pack(pady=15)
@@ -86,9 +103,18 @@ class ProtocolsPerformerUI(Frame):
         _thread.start_new_thread(self._run_protocol_thread, (selected,))
 
     def _run_protocol_thread(self, protocol_path: str):
-        """Run protocol in background thread."""
         try:
-            self.protocols_performer.perform_protocol(protocol_path)
+            # Get time scale and validate
+            try:
+                time_scale = self.time_scale_var.get()
+                if time_scale <= 0:
+                    raise ValueError("Timescale must be positive")
+            except (tk.TclError, ValueError) as e:
+                time_scale = 1.0
+                self.after(0, lambda: self.log(f"[WARNING] Invalid timescale, using 1.0: {e}", "error"))
+
+            self.after(0, lambda ts=time_scale: self.log(f"[TIMESCALE] Running at {ts}x speed", "info"))
+            self.protocols_performer.perform_protocol(protocol_path, time_scale=time_scale)
             
             if self.protocols_performer.fresco_xyz.should_stop():
                 self.after(0, lambda: self.log("[STOPPED] Protocol stopped by user", "info"))
@@ -105,14 +131,12 @@ class ProtocolsPerformerUI(Frame):
             self.after(0, lambda: self.run_btn.config(state=tk.NORMAL))
 
     def stop_protocol(self):
-        """Request protocol to stop."""
         if messagebox.askyesno("Stop Protocol", "Stop the current protocol?\n\nThe protocol will stop at the next checkpoint."):
             self.protocols_performer.fresco_xyz.request_stop()
             self.log("[STOP REQUESTED] Protocol will stop at next checkpoint...", "info")
             self.status_label.config(text="Stop requested...", fg="orange")
 
     def refresh(self):
-        """Refresh protocol list."""
         protocols = self.protocols_performer.available_protocols()
         self.protocols_combobox['values'] = protocols
         if protocols:

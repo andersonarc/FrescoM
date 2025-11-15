@@ -21,24 +21,29 @@ class ProtocolsPerformer:
         self.class_loader = FrescoClassLoader()
         self.current_protocol: BaseProtocol = None
 
-    def available_protocols(self) -> [str]:
-        """Get list of available protocol files."""
+    def available_protocols(self):
         files = [self.protocols_folder_path + '/' + f for f in listdir(self.protocols_folder_path) 
                 if isfile(join(self.protocols_folder_path, f)) and f.endswith('.py') and f != '__init__.py']
         return sorted(files)
 
-    def perform_protocol(self, path: str):
-        """Load and execute a protocol from file."""
+    def perform_protocol(self, path: str, time_scale: float = 1.0):
+        """Load and execute a protocol from file.
+
+        Args:
+            path: Path to protocol file
+            time_scale: Time scale multiplier (0.1=10x faster, 1.0=real-time, 2.0=2x slower)
+        """
         logging.info(f'Loading protocol from: {path}')
-        
+
         # Reset stop flag before starting
         self.fresco_xyz.reset_stop_flag()
-        
+
         try:
             protocol_class = self.class_loader.import_class(path)
             self.current_protocol = protocol_class(self.fresco_xyz, self.z_camera, self.images_storage)
-            
-            logging.info(f'Executing protocol: {protocol_class.__name__}')
+            self.current_protocol.time_scale = time_scale
+
+            logging.info(f'Executing protocol: {protocol_class.__name__} (time_scale={time_scale}x)')
             self.current_protocol.perform()
             
             if self.fresco_xyz.should_stop():

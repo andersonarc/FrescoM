@@ -7,7 +7,9 @@ PLATE_TYPES = {
         'well_depth': 10.5,
         'plate_thickness': 2.0,
         'row_labels': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
-        'steps_per_well': 1800  # 9mm * 200 steps/mm
+        'steps_per_well': 1800,  # 9mm * 200 steps/mm
+        'corner_offset_x': 14.38,  # Distance from plate corner to A1 center (mm)
+        'corner_offset_y': 11.24,
     },
     '384-well': {
         'rows': 16,
@@ -16,9 +18,11 @@ PLATE_TYPES = {
         'well_spacing': 4.5,
         'well_depth': 11.5,
         'plate_thickness': 2.0,
-        'row_labels': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 
+        'row_labels': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
                        'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'],
         'steps_per_well': 900,  # 4.5mm * 200 steps/mm
+        'corner_offset_x': 12.13,
+        'corner_offset_y': 8.99,
     },
     '24-well': {
         'rows': 4,
@@ -29,6 +33,8 @@ PLATE_TYPES = {
         'plate_thickness': 2.0,
         'row_labels': ['A', 'B', 'C', 'D'],
         'steps_per_well': 3860,  # 19.3mm * 200 steps/mm
+        'corner_offset_x': 17.2,
+        'corner_offset_y': 13.5,
     },
     '48-well': {
         'rows': 6,
@@ -39,6 +45,8 @@ PLATE_TYPES = {
         'plate_thickness': 2.0,
         'row_labels': ['A', 'B', 'C', 'D', 'E', 'F'],
         'steps_per_well': 2600,  # 13.0mm * 200 steps/mm
+        'corner_offset_x': 15.8,
+        'corner_offset_y': 12.0,
     },
 }
 

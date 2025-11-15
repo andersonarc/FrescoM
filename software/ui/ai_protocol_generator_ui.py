@@ -13,9 +13,10 @@ import logging
 
 class AIProtocolGeneratorUI(Frame):
 
-    def __init__(self, master, protocols_performer: ProtocolsPerformer):
+    def __init__(self, master, protocols_performer: ProtocolsPerformer, time_scale_var=None):
         super().__init__(master=master)
         self.protocols_performer = protocols_performer
+        self.time_scale_var = time_scale_var
         self.generated_code = None
         self.generated_protocol_name = None
         self.last_error = None
@@ -154,14 +155,19 @@ class AIProtocolGeneratorUI(Frame):
             if not filename.endswith('.json'):
                 filename += '.json'
 
-            path = f"{self.protocols_performer.protocols_folder_path}/{filename}"
+            # Create conversations subdirectory if it doesn't exist
+            conversations_dir = f"{self.protocols_performer.protocols_folder_path}/conversations"
+            import os
+            os.makedirs(conversations_dir, exist_ok=True)
+
+            path = f"{conversations_dir}/{filename}"
             try:
                 with open(path, 'w') as f:
                     json.dump({
                         'conversation_history': self.conversation_history,
                         'generated_code': self.generated_code
                     }, f, indent=2)
-                messagebox.showinfo("Saved", f"Conversation saved to {filename}")
+                messagebox.showinfo("Saved", f"Conversation saved to conversations/{filename}")
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
@@ -171,7 +177,9 @@ class AIProtocolGeneratorUI(Frame):
             if not filename.endswith('.json'):
                 filename += '.json'
 
-            path = f"{self.protocols_performer.protocols_folder_path}/{filename}"
+            # Load from conversations subdirectory
+            conversations_dir = f"{self.protocols_performer.protocols_folder_path}/conversations"
+            path = f"{conversations_dir}/{filename}"
             try:
                 with open(path, 'r') as f:
                     data = json.load(f)
@@ -397,7 +405,6 @@ When you have all information and are ready to generate code:
         self.log_text.update()
 
     def execute(self):
-        """Execute the generated protocol."""
         if not self.generated_code:
             return
 
@@ -414,14 +421,12 @@ When you have all information and are ready to generate code:
         _thread.start_new_thread(self._execute_protocol, ())
 
     def stop_execution(self):
-        """Request protocol to stop."""
         if messagebox.askyesno("Stop Protocol", "Stop the current protocol?\n\nThe protocol will stop at the next checkpoint."):
             self.protocols_performer.fresco_xyz.request_stop()
             self.log("[STOP REQUESTED] Protocol will stop at next checkpoint...")
             self.stop_btn.config(state=tk.DISABLED)
 
     def _execute_protocol(self):
-        """Execute protocol in background thread."""
         try:
             # Reset stop flag
             self.protocols_performer.fresco_xyz.reset_stop_flag()
@@ -446,6 +451,19 @@ When you have all information and are ready to generate code:
                 self.protocols_performer.z_camera,
                 self.protocols_performer.images_storage
             )
+
+            # Apply time scale from main UI or default to 1.0
+            try:
+                time_scale = self.time_scale_var.get() if self.time_scale_var else 1.0
+                if time_scale <= 0:
+                    self.after(0, lambda: self.log("[WARNING] Invalid time scale, using 1.0", "error"))
+                    time_scale = 1.0
+            except:
+                time_scale = 1.0
+            protocol.time_scale = time_scale
+
+            self.after(0, lambda ts=time_scale: self.log(f"[TIME SCALE] Running at {ts}x speed", "info"))
+
             protocol.perform()
             
             if self.protocols_performer.fresco_xyz.should_stop():
@@ -527,7 +545,8 @@ When you have all information and are ready to generate code:
 
 ## Coordinate System
 - 200 steps = 1mm
-- Plate-relative coordinates: (0,0) is ALWAYS the bottom-left well (A1)
+- Plate-relative coordinates: (0,0) is ALWAYS the physical bottom-left CORNER of the plate
+- Well A1 center is offset from (0,0) by the plate's corner offset (e.g., ~14.38mm, ~11.24mm for 96-well)
 - Z-axis: negative=up, positive=down
 - Plate calibration is handled automatically - all movement methods account for it
 - Use any movement method freely - set_position(), delta(), or helper methods all work
@@ -555,11 +574,15 @@ class MyProtocol(BaseProtocol):
                 # Do something...
                 self.check_pause_stop()
 
-        # Example 2: Using absolute positioning
-        self.fresco_xyz.set_position(0, 0, -2000)  # Go to A1 at z=-2000
+        # Example 2: Go to specific well by label
+        self.move_to_well_label("A1", z=-2000)  # Go to well A1 at z=-2000
+        self.move_to_well_label("B12")  # Go to well B12, keep current z
 
-        # Example 3: Using relative movement
-        self.fresco_xyz.delta(self.well_spacing_steps, 0, 0)  # Move one well right
+        # Example 3: Using absolute positioning (plate corner coordinates)
+        self.fresco_xyz.set_position(0, 0, -2000)  # Go to plate corner at z=-2000
+
+        # Example 4: Using relative movement
+        self.fresco_xyz.delta(self.well_spacing_steps, 0, 0)  # Move one well spacing right
 
         if self.fresco_xyz.should_stop():
             return
@@ -568,14 +591,16 @@ class MyProtocol(BaseProtocol):
 ## Available Methods
 
 **Movement (self.fresco_xyz) - All methods handle calibration automatically:**
-- `self.fresco_xyz.set_position(x_steps, y_steps, z_steps)` - Move to plate-relative position
+- `self.fresco_xyz.set_position(x_steps, y_steps, z_steps)` - Move to plate-relative position (from corner)
 - `self.fresco_xyz.delta(x_steps, y_steps, z_steps)` - Move relative to current position
-- `self.fresco_xyz.go_to_zero()` - Return to (0,0) bottom-left well at safe height
+- `self.fresco_xyz.go_to_zero()` - Return to (0,0) plate corner at safe height
 - `self.fresco_xyz.go_to_zero_z()` - Raise Z to safe height
 
 **Well Navigation Helpers (from BaseProtocol) - Convenient for well-based protocols:**
-- `self.move_to_well(row, col, z=None)` - Move to specific well by row/col indices
+- `self.move_to_well_label("A1", z=None)` - Move to well by label (e.g., "A1", "B12", "P24")
+- `self.move_to_well(row, col, z=None)` - Move to well by indices (row 0=A, col 0=1)
 - `self.get_well_position(row, col, z=None)` - Get (x, y, z) position for a well
+- `self.parse_well_label("A1")` - Parse well label to (row, col) indices
 
 **Pumps (self.fresco_xyz):**
 - `self.fresco_xyz.delta_pump(pump_index, delta_steps)` - pump_index 0-7, positive=dispense, negative=aspirate
@@ -595,9 +620,11 @@ class MyProtocol(BaseProtocol):
 - `self.fresco_xyz.blue_led_switch(True/False)` - blue LED on/off
 
 **Timing & Control (self):**
-- `self.hold_position(seconds)` - wait and check for pause/stop
+- `self.sleep(seconds)` - wait for specified seconds (scaled by time_scale, auto checks pause/stop)
+- `self.hold_position(seconds)` - same as sleep() (legacy alias)
 - `self.check_pause_stop()` - check if user paused/stopped protocol
 - `self.fresco_xyz.should_stop()` - returns True if stop requested
+- `self.time_scale` - current time scale multiplier (read-only, set by UI)
 
 **Plate Info (from BaseProtocol):**
 - `self.plate_rows` - number of rows (e.g. 8 for 96-well)
@@ -618,7 +645,8 @@ Users can pause or stop protocols during execution:
 3. Plate-relative coordinates: (0,0) = bottom-left well (A1)
 4. Well indices are 0-based: row 0 = A, row 1 = B, etc.; col 0 = 1, col 1 = 2, etc.
 5. Check `should_stop()` and call `check_pause_stop()` regularly in loops
-6. Use any movement method freely - all handle calibration automatically"""
+6. Use any movement method freely - all handle calibration automatically
+7. IMPORTANT: Use `self.sleep(seconds)` instead of `time.sleep()` for delays - it respects time_scale and pause/stop"""
 
     def _get_example_protocols(self) -> List[tuple]:
         examples = []

@@ -54,6 +54,7 @@ class StdoutView:
 
         y_offset = 10
         line_height = 14
+        max_chars_per_line = 100  # Characters before wrapping
 
         with self.lock:
             visible_lines = (self.height - 20) // line_height
@@ -74,9 +75,25 @@ class StdoutView:
             elif 'INFO' in line.upper():
                 color = '#9cdcfe'
 
+            # Wrap long lines
+            text = line.strip()
+            wrapped_lines = []
+            while len(text) > max_chars_per_line:
+                wrapped_lines.append(text[:max_chars_per_line])
+                text = text[max_chars_per_line:]
+            if text:
+                wrapped_lines.append(text)
+
+            # Draw timestamp on first line only
             draw.text((10, y_offset), timestamp, fill='#6a9955', font=font_small)
-            draw.text((70, y_offset), line.strip()[:120], fill=color, font=font)
-            y_offset += line_height
+
+            # Draw wrapped lines
+            for i, wrapped_line in enumerate(wrapped_lines):
+                if y_offset >= self.height - line_height:
+                    break
+                x_offset = 70 if i == 0 else 10  # Indent continuation lines
+                draw.text((x_offset, y_offset), wrapped_line, fill=color, font=font)
+                y_offset += line_height
 
         return np.array(img)
     

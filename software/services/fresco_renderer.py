@@ -32,7 +32,7 @@ class Well:
 class FrescoRenderer:
     MANIFOLD_TIP_LENGTH = 20.0
     WELL_SEGMENTS = 12
-    TRAJECTORY_MAX_POINTS = 500
+    TRAJECTORY_MAX_POINTS = 100
     
     def __init__(self, image_processor, fresco_xyz, plate_type='96-well'):
         self.image_processor = image_processor
@@ -44,8 +44,10 @@ class FrescoRenderer:
         self.height = 800
         
         cfg = self.plate_config
-        self.plate_width = (cfg['cols'] - 1) * cfg['well_spacing']
-        self.plate_height = (cfg['rows'] - 1) * cfg['well_spacing']
+        # Plate dimensions include corner offset plus well spacing
+        # Add extra margin on opposite side equal to corner offset
+        self.plate_width = cfg['corner_offset_x'] + (cfg['cols'] - 1) * cfg['well_spacing'] + cfg['corner_offset_x']
+        self.plate_height = cfg['corner_offset_y'] + (cfg['rows'] - 1) * cfg['well_spacing'] + cfg['corner_offset_y']
         
         pygame.init()
         self.screen = pygame.display.set_mode((self.width, self.height), OPENGL | HIDDEN)
@@ -112,11 +114,15 @@ class FrescoRenderer:
         wells = []
 
         well_radius = cfg['well_diameter'] / 2
+        # Offset from plate corner to A1 center
+        offset_x = cfg['corner_offset_x']
+        offset_y = cfg['corner_offset_y']
 
         for row in range(cfg['rows']):
             for col in range(cfg['cols']):
-                x = col * cfg['well_spacing']
-                y = row * cfg['well_spacing']
+                # Wells positioned relative to plate corner (0,0)
+                x = offset_x + col * cfg['well_spacing']
+                y = offset_y + row * cfg['well_spacing']
                 label = f"{cfg['row_labels'][row]}{col + 1}"
                 well = Well(row, col, x, y, well_radius, cfg['well_depth'], label)
                 wells.append(well)

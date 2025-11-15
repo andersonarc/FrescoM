@@ -1,4 +1,4 @@
-from tkinter import BOTH, Tk
+from tkinter import BOTH, Tk, messagebox
 import tkinter as tk
 from tkinter.ttk import Frame, Label, Notebook
 from services.fresco_xyz import FrescoXYZ
@@ -70,85 +70,102 @@ class PumpTraceView(tk.Frame):
 
         self.current_well = None
         self.current_event_count = 0
-        self.after(1000, self.update_loop)
+        self.update_in_progress = False  # Prevent concurrent updates
+        self.after(500, self.update_loop)
 
     def on_mode_changed(self):
         self.current_event_count = 0  # Force update on next call
         self.update_plot()
 
     def update_loop(self):
-        self.update_plot()
-        self.after(1000, self.update_loop)
+        # Only update if no update is currently in progress
+        if not self.update_in_progress:
+            self.update_plot()
+        self.after(500, self.update_loop)
     
     def update_plot(self):
-        if self.auto_var.get() and self.renderer.current_well:
-            well_label = self.renderer.current_well.label
-        else:
-            well_label = self.well_entry.get().upper()
-            if not well_label:
+        # Prevent concurrent updates
+        if self.update_in_progress:
+            return
+
+        try:
+            self.update_in_progress = True
+
+            if self.auto_var.get() and self.renderer.current_well:
+                well_label = self.renderer.current_well.label
+            else:
+                well_label = self.well_entry.get().upper()
+                if not well_label:
+                    return
+
+            well = None
+            for w in self.renderer.wells:
+                if w.label == well_label:
+                    well = w
+                    break
+
+            if not well or not well.pump_events:
                 return
 
-        well = None
-        for w in self.renderer.wells:
-            if w.label == well_label:
-                well = w
-                break
+            # Skip update if same well and no new pump events
+            event_count = len(well.pump_events)
+            if well_label == self.current_well and event_count == self.current_event_count:
+                return
 
-        if not well or not well.pump_events:
-            return
+            self.current_well = well_label
+            self.current_event_count = event_count
 
-        # Skip update if same well and no new pump events
-        event_count = len(well.pump_events)
-        if well_label == self.current_well and event_count == self.current_event_count:
-            return
-
-        self.current_well = well_label
-        self.current_event_count = event_count
-
-        if self.sync_var.get():
-            pump_data = self._build_synchronized_traces(well)
-        else:
-            pump_data = self._build_independent_traces(well)
-
-        # Find min/max y values for synchronized y-axis scaling in Sync mode
-        min_y = 0
-        max_y = 0
-        if self.sync_var.get():
-            for pump_idx in range(8):
-                if pump_data[pump_idx]['y']:
-                    min_y = min(min_y, min(pump_data[pump_idx]['y']))
-                    max_y = max(max_y, max(pump_data[pump_idx]['y']))
-
-        for pump_idx in range(8):
-            ax = self.axes[pump_idx]
-            ax.clear()
-
-            data = pump_data[pump_idx]
-            if data['x']:
-                ax.plot(data['x'], data['y'], 'k-', linewidth=1.5, drawstyle='steps-post')
-
-                for idx in data['interruptions']:
-                    if idx < len(data['x']):
-                        ax.axvline(x=data['x'][idx], color='red', linestyle='--',
-                                  linewidth=1, alpha=0.7)
-
-            # Synchronize y-axis in Sync mode
             if self.sync_var.get():
-                # Add 5% padding on both ends
-                y_range = max_y - min_y
-                padding = y_range * 0.05 if y_range > 0 else 1
-                ax.set_ylim(min_y - padding, max_y + padding)
+                pump_data = self._build_synchronized_traces(well)
+            else:
+                pump_data = self._build_independent_traces(well)
 
-            ax.set_ylabel(f'P{pump_idx}', rotation=0, labelpad=15, fontsize=9)
-            ax.grid(True, alpha=0.3, linestyle=':')
-            ax.tick_params(labelsize=7)
+            # Find min/max y values for synchronized y-axis scaling in Sync mode
+            min_y = 0
+            max_y = 0
+            if self.sync_var.get():
+                for pump_idx in range(8):
+                    if pump_data[pump_idx]['y']:
+                        min_y = min(min_y, min(pump_data[pump_idx]['y']))
+                        max_y = max(max_y, max(pump_data[pump_idx]['y']))
 
-            if pump_idx < 7:
-                ax.set_xticklabels([])
+            for pump_idx in range(8):
+                ax = self.axes[pump_idx]
+                ax.clear()
 
-        self.axes[7].set_xlabel('Event Sequence', fontsize=8)
-        self.well_label.config(text=f'Well {well_label}')
-        self.canvas.draw()
+                data = pump_data[pump_idx]
+                if data['x']:
+                    ax.plot(data['x'], data['y'], 'k-', linewidth=1.5, drawstyle='steps-post')
+
+                    for idx in data['interruptions']:
+                        if idx < len(data['x']):
+                            ax.axvline(x=data['x'][idx], color='red', linestyle='--',
+                                      linewidth=1, alpha=0.7)
+
+                # Synchronize y-axis in Sync mode
+                if self.sync_var.get():
+                    # Add 5% padding on both ends
+                    y_range = max_y - min_y
+                    padding = y_range * 0.05 if y_range > 0 else 1
+                    ax.set_ylim(min_y - padding, max_y + padding)
+
+                ax.set_ylabel(f'P{pump_idx}', rotation=0, labelpad=15, fontsize=9)
+                ax.grid(True, alpha=0.3, linestyle=':')
+                ax.tick_params(labelsize=7)
+
+                if pump_idx < 7:
+                    ax.set_xticklabels([])
+
+            self.axes[7].set_xlabel('Event Sequence', fontsize=8)
+            self.well_label.config(text=f'Well {well_label}')
+
+            # Use draw_idle() instead of draw() to avoid blocking during fast updates
+            self.canvas.draw_idle()
+        except Exception as e:
+            # Log errors but don't break the update loop
+            print(f"Pump trace update error: {e}")
+        finally:
+            self.update_in_progress = False
     
     def _build_synchronized_traces(self, well):
         pump_data = {}
@@ -248,7 +265,18 @@ class MainUI(Frame):
         self.view_label = tk.Label(btn_row, text=f"View: {self.view_modes[self.current_view_index]}",
                                    font=("Arial", 9))
         self.view_label.pack(side=tk.LEFT, padx=10)
-        
+
+        tk.Label(btn_row, text="Timescale:", font=("Arial", 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.time_scale_var = tk.DoubleVar(value=1.0)
+        # Allow protocols to read time scale changes in real-time
+        self.fresco_xyz.time_scale_var = self.time_scale_var
+        time_scale_entry = tk.Entry(btn_row, textvariable=self.time_scale_var, width=6)
+        time_scale_entry.pack(side=tk.LEFT, padx=2)
+
+        self.apply_timescale_btn = tk.Button(btn_row, text='Apply', command=self.apply_timescale,
+                                              font=("Arial", 8), padx=5)
+        self.apply_timescale_btn.pack(side=tk.LEFT, padx=2)
+
         tk.Label(btn_row, text="3D: +/- zoom, WASD rotate, Arrows pan, C center, R reset",
                 font=("Arial", 8), fg="gray").pack(side=tk.RIGHT, padx=5)
         
@@ -298,7 +326,7 @@ class MainUI(Frame):
                  command=lambda: self.open_protocol_manager(protocols_performer)).pack(pady=10)
         
         ai_tab = Frame(control_notebook)
-        control_notebook.add(ai_tab, text="AI Generator")
+        control_notebook.add(ai_tab, text="Generator")
         
         tk.Button(ai_tab, text="Open Protocol Generator",
                  command=lambda: self.open_ai_generator(protocols_performer),
@@ -323,6 +351,24 @@ class MainUI(Frame):
             self.camera = self.stdout_view
         
         self.view_label.config(text=f"View: {mode}")
+
+    def apply_timescale(self):
+        try:
+            time_scale = self.time_scale_var.get()
+            if time_scale <= 0:
+                messagebox.showerror("Invalid timescale", "Timescale must be greater than 0")
+                self.time_scale_var.set(1.0)
+                return
+
+            # Flash button green to confirm
+            original_bg = self.apply_timescale_btn.cget('bg')
+            self.apply_timescale_btn.config(bg='green')
+            self.after(200, lambda: self.apply_timescale_btn.config(bg=original_bg))
+
+            print(f"Timescale set to {time_scale}x (applies immediately to running protocols)")
+        except tk.TclError:
+            messagebox.showerror("Invalid input", "Please enter a valid number for timescale")
+            self.time_scale_var.set(1.0)
 
     def update_image(self):
         image_array = self.camera.get_current_image()
@@ -380,10 +426,10 @@ class MainUI(Frame):
     def open_protocol_manager(self, protocols_performer):
         window = Toplevel(self)
         window.title("Protocol Manager")
-        ProtocolsPerformerUI(window, protocols_performer).pack(fill=BOTH, expand=True)
+        ProtocolsPerformerUI(window, protocols_performer, self.time_scale_var).pack(fill=BOTH, expand=True)
     
     def open_ai_generator(self, protocols_performer):
         window = Toplevel(self)
         window.title("Protocol Generator")
         window.geometry("900x850")
-        AIProtocolGeneratorUI(window, protocols_performer).pack(fill=BOTH, expand=True)
+        AIProtocolGeneratorUI(window, protocols_performer, self.time_scale_var).pack(fill=BOTH, expand=True)

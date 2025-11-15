@@ -33,6 +33,7 @@ class FrescoXYZ:
         self.renderer = None
         self.stop_requested = False
         self.collision_warnings_enabled = True
+        self.time_scale_var = None  # Will be set by UI for runtime time scale changes
 
     def send(self, message: str):
         logging.debug(f"[FrescoXYZ] Sending: {message}")
@@ -282,16 +283,18 @@ class FrescoXYZ:
         if y_mm < min_y or y_mm > max_y:
             warnings.append(f"Y out of bounds: {y_mm:.1f}mm (range {min_y:.1f} to {max_y:.1f}mm)")
         
-        well = self.renderer.get_well_at_position(x_mm, y_mm)
-        manifold_z_mm = z_mm - (self.virtual_manifold_position / self.STEPS_PER_MM)
-        tip_z = manifold_z_mm - 20.0
+        # Only check manifold collision if manifold is not at zero/home position
+        if self.virtual_manifold_position != 0:
+            well = self.renderer.get_well_at_position(x_mm, y_mm)
+            manifold_z_mm = z_mm - (self.virtual_manifold_position / self.STEPS_PER_MM)
+            tip_z = manifold_z_mm - 20.0
 
-        plate_top = self.renderer.plate_config['plate_thickness']
+            plate_top = self.renderer.plate_config['plate_thickness']
 
-        if well is None and tip_z > -2.0 and tip_z < plate_top + 2.0:
-            warnings.append(f"Manifold tip near plate surface at Z={tip_z:.1f}mm")
-        elif well and tip_z < (plate_top - well.depth - 0.5):
-            warnings.append(f"Manifold tip penetrating well {well.label} bottom")
+            if well is None and tip_z > -2.0 and tip_z < plate_top + 2.0:
+                warnings.append(f"Manifold tip near plate surface at Z={tip_z:.1f}mm")
+            elif well and tip_z < (plate_top - well.depth - 0.5):
+                warnings.append(f"Manifold tip penetrating well {well.label} bottom")
         
         self.renderer.collision_state = bool(warnings)
         
@@ -385,7 +388,7 @@ class FrescoXYZ:
 
     def go_to_zero(self):
         """
-        Return to bottom-left well (A1) at safe Z height.
+        Return to plate origin (0,0) = bottom-left corner at safe Z height.
         Plate calibration is handled automatically.
         """
         self.set_position(0, 0, self.SAFE_DEFAULT_Z)
